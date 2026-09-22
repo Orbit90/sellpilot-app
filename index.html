@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      // Suppress unhandled errors from injected third-party browser extensions (e.g. MetaMask, web3 wallets)
+      (function() {
+        var isExtensionError = function(msg, source) {
+          if (!msg && !source) return false;
+          var str = (String(msg) + ' ' + String(source)).toLowerCase();
+          return (
+            str.indexOf('metamask') !== -1 ||
+            str.indexOf('ethereum') !== -1 ||
+            str.indexOf('chrome.runtime') !== -1 ||
+            str.indexOf('extension context invalidated') !== -1 ||
+            str.indexOf('failed to connect to metamask') !== -1 ||
+            str.indexOf('chrome-extension://') !== -1 ||
+            str.indexOf('moz-extension://') !== -1
+          );
+        };
+
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event && (event.reason || event.detail);
+          var msg = (typeof reason === 'string' ? reason : (reason && reason.message) || '') + '';
+          var stack = (reason && reason.stack) || '';
+          if (isExtensionError(msg, stack)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+
+        window.addEventListener('error', function(event) {
+          var msg = (event && event.message) || '';
+          var filename = (event && event.filename) || '';
+          if (isExtensionError(msg, filename)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>SellPilot — Turn Conversations Into Sales</title>
+    <meta name="description" content="AI-powered sales assistant for small businesses selling on WhatsApp and Instagram in Nigeria. Turn customer conversations into completed sales." />
+    <meta property="og:title" content="SellPilot — Turn Conversations Into Sales" />
+    <meta property="og:description" content="AI-powered sales assistant for small businesses selling on WhatsApp and Instagram in Nigeria." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#0F766E" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="SellPilot" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  </head>
+  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-teal-500 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

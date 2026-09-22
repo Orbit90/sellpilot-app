@@ -1,0 +1,7 @@
+{
+  "name": "SellPilot",
+  "description": "AI-powered sales assistant for WhatsApp and Instagram sellers. Turn customer conversations into completed sales.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

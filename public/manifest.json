@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "SellPilot — AI Sales Assistant",
+  "short_name": "SellPilot",
+  "description": "Turn customer conversations into completed sales for Nigerian businesses.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0F172A",
+  "theme_color": "#0F766E",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

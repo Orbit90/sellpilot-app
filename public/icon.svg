@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="128" fill="#0F766E"/>
+  <defs>
+    <linearGradient id="pilotGrad" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#0D9488"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="104" fill="url(#pilotGrad)"/>
+  <!-- Paper airplane / pilot compass symbol representing sales navigation & instant chat messages -->
+  <path d="M120 256L392 144L280 416L240 288L120 256Z" fill="#FFFFFF" stroke="#042F2E" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M392 144L240 288" stroke="#042F2E" stroke-width="16" stroke-linecap="round"/>
+  <!-- Small currency Naira emblem accent in top corner -->
+  <circle cx="390" cy="380" r="44" fill="#042F2E"/>
+  <text x="390" y="396" font-family="Arial, sans-serif" font-weight="900" font-size="44" fill="#2DD4BF" text-anchor="middle">₦</text>
+</svg>
