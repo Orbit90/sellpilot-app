@@ -25,7 +25,6 @@ export const SettingsView: React.FC = () => {
     updateBusinessProfile,
     updateSettings,
     resetToDemoData,
-    quickSwitchToDemo,
     logout,
     showToast,
   } = useApp();

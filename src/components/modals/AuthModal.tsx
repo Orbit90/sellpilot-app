@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Sparkles, ArrowRight, ShieldCheck, CheckCircle2, Lock, Mail, User, Building2 } from 'lucide-react';
+import { ArrowRight, ShieldCheck, CheckCircle2, Lock, Mail, User, Building2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../services/api';
 
 export const AuthModal: React.FC = () => {
-  const { login, signup, quickSwitchToDemo, showToast } = useApp();
+  const { login, signup, showToast } = useApp();
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
 
   const [email, setEmail] = useState('');
@@ -182,18 +182,6 @@ export const AuthModal: React.FC = () => {
                 </button>
               </p>
             )}
-          </div>
-
-          {/* Instant 1-Click Demo Account Login */}
-          <div className="pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={quickSwitchToDemo}
-              className="w-full py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors flex items-center justify-center gap-2"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-              <span>Explore as Zarah Styles (1-Click Demo)</span>
-            </button>
           </div>
         </form>
       </div>
