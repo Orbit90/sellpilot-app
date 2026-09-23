@@ -211,7 +211,18 @@ export const businessesRepo = {
     const existing = await businessesRepo.findById(id);
     if (!existing) return null;
 
-    const merged: Business = { ...existing, ...updates };
+    const name = updates.name !== undefined && updates.name !== null ? updates.name.trim() : existing.name;
+    const category = updates.category !== undefined && updates.category !== null ? updates.category : existing.category;
+    const description = updates.description !== undefined && updates.description !== null ? updates.description : (existing.description || '');
+    const logo = updates.logo !== undefined ? updates.logo : existing.logo;
+    const phone = updates.phone !== undefined && updates.phone !== null ? updates.phone.trim() : (existing.phone || '');
+    const location = updates.location !== undefined && updates.location !== null ? updates.location.trim() : (existing.location || '');
+    const currency = updates.currency !== undefined && updates.currency !== null ? updates.currency : (existing.currency || '₦');
+    const deliveryInfo = updates.deliveryInfo !== undefined && updates.deliveryInfo !== null ? updates.deliveryInfo.trim() : (existing.deliveryInfo || '');
+    const returnPolicy = updates.returnPolicy !== undefined && updates.returnPolicy !== null ? updates.returnPolicy.trim() : (existing.returnPolicy || '');
+    const paymentInstructions = updates.paymentInstructions !== undefined && updates.paymentInstructions !== null ? updates.paymentInstructions.trim() : (existing.paymentInstructions || '');
+    const faqs = updates.faqs !== undefined && updates.faqs !== null ? updates.faqs : (existing.faqs || []);
+    const onboardingCompleted = updates.onboardingCompleted !== undefined ? Boolean(updates.onboardingCompleted) : existing.onboardingCompleted;
 
     await query(
       `UPDATE businesses SET
@@ -230,18 +241,18 @@ export const businessesRepo = {
         updated_at = NOW()
        WHERE id = $13`,
       [
-        merged.name,
-        merged.category,
-        merged.description,
-        merged.logo || null,
-        merged.phone,
-        merged.location,
-        merged.currency,
-        merged.deliveryInfo,
-        merged.returnPolicy,
-        merged.paymentInstructions,
-        JSON.stringify(merged.faqs || []),
-        merged.onboardingCompleted,
+        name || existing.name || 'Store',
+        category || existing.category || 'fashion',
+        description ?? '',
+        logo || null,
+        phone ?? '',
+        location ?? '',
+        currency ?? '₦',
+        deliveryInfo ?? '',
+        returnPolicy ?? '',
+        paymentInstructions ?? '',
+        JSON.stringify(faqs ?? []),
+        onboardingCompleted,
         id,
       ]
     );
@@ -534,9 +545,14 @@ export const productsRepo = {
     const existing = await productsRepo.findById(id, businessId);
     if (!existing) return null;
 
-    const merged = { ...existing, ...updates };
-    const safePrice = Math.max(0, Math.round(Number(merged.price) || 0));
-    const safeStock = Math.max(0, Math.round(Number(merged.stockQuantity) || 0));
+    const name = updates.name !== undefined && updates.name !== null ? updates.name.trim() : existing.name;
+    const category = updates.category !== undefined && updates.category !== null ? updates.category : existing.category;
+    const description = updates.description !== undefined && updates.description !== null ? updates.description : (existing.description || '');
+    const images = updates.images !== undefined ? updates.images : (existing.images || []);
+    const sku = updates.sku !== undefined ? updates.sku : (existing.sku || '');
+    const status = updates.status !== undefined && updates.status !== null ? updates.status : (existing.status || 'active');
+    const safePrice = Math.max(0, Math.round(Number(updates.price !== undefined ? updates.price : existing.price) || 0));
+    const safeStock = Math.max(0, Math.round(Number(updates.stockQuantity !== undefined ? updates.stockQuantity : existing.stockQuantity) || 0));
 
     await withTransaction(async (client) => {
       await client.query(
@@ -552,14 +568,14 @@ export const productsRepo = {
           updated_at = NOW()
         WHERE id = $9 AND business_id = $10`,
         [
-          merged.name.trim(),
+          name || existing.name || 'Product',
           safePrice,
-          merged.category,
-          merged.description,
-          JSON.stringify(merged.images || []),
+          category || existing.category || 'General',
+          description ?? '',
+          JSON.stringify(images || []),
           safeStock,
-          merged.sku,
-          merged.status,
+          sku || null,
+          status || 'active',
           id,
           businessId,
         ]
@@ -705,7 +721,18 @@ export const customersRepo = {
     const existing = await customersRepo.findById(id, businessId);
     if (!existing) return null;
 
-    const merged = { ...existing, ...updates };
+    const name = updates.name !== undefined && updates.name !== null ? updates.name.trim() : existing.name;
+    const phone = updates.phone !== undefined && updates.phone !== null ? updates.phone.trim() : existing.phone;
+    const email = updates.email !== undefined ? (updates.email?.trim() || null) : (existing.email || null);
+    const location = updates.location !== undefined && updates.location !== null ? updates.location.trim() : (existing.location || '');
+    const ordersCount = Math.max(0, Math.round(Number(updates.ordersCount !== undefined ? updates.ordersCount : existing.ordersCount) || 0));
+    const totalSpent = Math.max(0, Math.round(Number(updates.totalSpent !== undefined ? updates.totalSpent : existing.totalSpent) || 0));
+    const lastOrderDate = updates.lastOrderDate !== undefined
+      ? (updates.lastOrderDate ? new Date(updates.lastOrderDate).toISOString() : null)
+      : (existing.lastOrderDate ? new Date(existing.lastOrderDate).toISOString() : null);
+    const status = updates.status !== undefined && updates.status !== null ? updates.status : (existing.status || 'Active');
+    const notes = updates.notes !== undefined && updates.notes !== null ? updates.notes : (existing.notes || '');
+    const interactions = updates.interactions !== undefined ? updates.interactions : (existing.interactions || []);
 
     await query(
       `UPDATE customers SET
@@ -722,16 +749,16 @@ export const customersRepo = {
         updated_at = NOW()
       WHERE id = $11 AND business_id = $12`,
       [
-        merged.name.trim(),
-        merged.phone.trim(),
-        merged.email?.trim() || null,
-        merged.location.trim(),
-        Math.max(0, Math.round(Number(merged.ordersCount) || 0)),
-        Math.max(0, Math.round(Number(merged.totalSpent) || 0)),
-        merged.lastOrderDate ? new Date(merged.lastOrderDate).toISOString() : null,
-        merged.status,
-        merged.notes,
-        JSON.stringify(merged.interactions || []),
+        name || existing.name || 'Customer',
+        phone || existing.phone || '',
+        email,
+        location ?? '',
+        ordersCount,
+        totalSpent,
+        lastOrderDate,
+        status,
+        notes ?? '',
+        JSON.stringify(interactions || []),
         id,
         businessId,
       ]
@@ -1140,7 +1167,12 @@ export const ordersRepo = {
     const existing = await ordersRepo.findById(id, businessId);
     if (!existing) return null;
 
-    const merged = { ...existing, ...updates };
+    const customerName = updates.customerName !== undefined && updates.customerName !== null ? updates.customerName.trim() : existing.customerName;
+    const customerPhone = updates.customerPhone !== undefined && updates.customerPhone !== null ? updates.customerPhone.trim() : existing.customerPhone;
+    const paymentStatus = updates.paymentStatus !== undefined && updates.paymentStatus !== null ? updates.paymentStatus : existing.paymentStatus;
+    const orderStatus = updates.orderStatus !== undefined && updates.orderStatus !== null ? updates.orderStatus : existing.orderStatus;
+    const deliveryAddress = updates.deliveryAddress !== undefined && updates.deliveryAddress !== null ? updates.deliveryAddress.trim() : (existing.deliveryAddress || '');
+    const notes = updates.notes !== undefined && updates.notes !== null ? updates.notes : (existing.notes || '');
 
     await query(
       `UPDATE orders SET
@@ -1153,12 +1185,12 @@ export const ordersRepo = {
         updated_at = NOW()
       WHERE id = $7 AND business_id = $8`,
       [
-        merged.customerName,
-        merged.customerPhone,
-        merged.paymentStatus,
-        merged.orderStatus,
-        merged.deliveryAddress,
-        merged.notes,
+        customerName || existing.customerName || 'Customer',
+        customerPhone || existing.customerPhone || '',
+        paymentStatus || 'Unpaid',
+        orderStatus || 'New',
+        deliveryAddress ?? '',
+        notes ?? '',
         id,
         businessId,
       ]
@@ -1310,7 +1342,14 @@ export const followUpsRepo = {
     const existing = await followUpsRepo.findById(id, businessId);
     if (!existing) return null;
 
-    const merged = { ...existing, ...updates };
+    const customerName = updates.customerName !== undefined && updates.customerName !== null ? updates.customerName.trim() : existing.customerName;
+    const customerPhone = updates.customerPhone !== undefined && updates.customerPhone !== null ? updates.customerPhone.trim() : existing.customerPhone;
+    const reason = updates.reason !== undefined && updates.reason !== null ? updates.reason.trim() : existing.reason;
+    const suggestedMessage = updates.suggestedMessage !== undefined && updates.suggestedMessage !== null ? updates.suggestedMessage.trim() : (existing.suggestedMessage || '');
+    const status = updates.status !== undefined && updates.status !== null ? updates.status : existing.status;
+    const dueDate = updates.dueDate !== undefined
+      ? (updates.dueDate ? new Date(updates.dueDate).toISOString() : new Date().toISOString())
+      : (existing.dueDate ? new Date(existing.dueDate).toISOString() : new Date().toISOString());
 
     await query(
       `UPDATE follow_ups SET
@@ -1323,12 +1362,12 @@ export const followUpsRepo = {
         updated_at = NOW()
       WHERE id = $7 AND business_id = $8`,
       [
-        merged.customerName,
-        merged.customerPhone,
-        merged.reason,
-        merged.suggestedMessage,
-        merged.status,
-        merged.dueDate ? new Date(merged.dueDate).toISOString() : new Date().toISOString(),
+        customerName || existing.customerName || 'Customer',
+        customerPhone || existing.customerPhone || '',
+        reason || existing.reason || 'Follow-up',
+        suggestedMessage ?? '',
+        status || 'Pending',
+        dueDate,
         id,
         businessId,
       ]
@@ -1641,7 +1680,23 @@ export const subscriptionsRepo = {
     const existing = await subscriptionsRepo.findByBusinessId(businessId);
     if (!existing) return null;
 
-    const merged = { ...existing, ...updates };
+    const plan = updates.plan !== undefined && updates.plan !== null ? updates.plan : existing.plan;
+    const status = updates.status !== undefined && updates.status !== null ? updates.status : existing.status;
+    const trialStartedAt = updates.trialStartedAt !== undefined
+      ? (updates.trialStartedAt ? new Date(updates.trialStartedAt).toISOString() : null)
+      : (existing.trialStartedAt ? new Date(existing.trialStartedAt).toISOString() : null);
+    const trialEndsAt = updates.trialEndsAt !== undefined
+      ? (updates.trialEndsAt ? new Date(updates.trialEndsAt).toISOString() : null)
+      : (existing.trialEndsAt ? new Date(existing.trialEndsAt).toISOString() : null);
+    const currentPeriodStart = updates.currentPeriodStart !== undefined
+      ? (updates.currentPeriodStart ? new Date(updates.currentPeriodStart).toISOString() : existing.currentPeriodStart)
+      : existing.currentPeriodStart;
+    const currentPeriodEnd = updates.currentPeriodEnd !== undefined
+      ? (updates.currentPeriodEnd ? new Date(updates.currentPeriodEnd).toISOString() : existing.currentPeriodEnd)
+      : existing.currentPeriodEnd;
+    const cancelledAt = updates.cancelledAt !== undefined
+      ? (updates.cancelledAt ? new Date(updates.cancelledAt).toISOString() : null)
+      : (existing.cancelledAt ? new Date(existing.cancelledAt).toISOString() : null);
 
     await query(
       `UPDATE subscriptions SET
@@ -1655,13 +1710,13 @@ export const subscriptionsRepo = {
         updated_at = NOW()
       WHERE business_id = $8`,
       [
-        merged.plan,
-        merged.status,
-        merged.trialStartedAt ? new Date(merged.trialStartedAt).toISOString() : null,
-        merged.trialEndsAt ? new Date(merged.trialEndsAt).toISOString() : null,
-        new Date(merged.currentPeriodStart).toISOString(),
-        new Date(merged.currentPeriodEnd).toISOString(),
-        merged.cancelledAt ? new Date(merged.cancelledAt).toISOString() : null,
+        plan,
+        status,
+        trialStartedAt,
+        trialEndsAt,
+        currentPeriodStart ? new Date(currentPeriodStart).toISOString() : new Date().toISOString(),
+        currentPeriodEnd ? new Date(currentPeriodEnd).toISOString() : new Date().toISOString(),
+        cancelledAt,
         businessId,
       ]
     );

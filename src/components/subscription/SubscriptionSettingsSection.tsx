@@ -19,6 +19,8 @@ import {
   ShoppingBag,
   MessageSquare,
   Bot,
+  Search,
+  ExternalLink,
 } from 'lucide-react';
 
 export const SubscriptionSettingsSection: React.FC = () => {
@@ -44,6 +46,7 @@ export const SubscriptionSettingsSection: React.FC = () => {
   const [adminTestMetric, setAdminTestMetric] = useState<SubscriptionMetric>('ai_analysis');
   const [adminTestCount, setAdminTestCount] = useState<number>(50);
   const [isAdminActionLoading, setIsAdminActionLoading] = useState(false);
+  const [subscriberSearch, setSubscriberSearch] = useState<string>('');
 
   useEffect(() => {
     if (isAdmin) {
@@ -51,7 +54,8 @@ export const SubscriptionSettingsSection: React.FC = () => {
         .then((data) => {
           setAdminStores(data);
           if (data.length > 0 && !selectedAdminBizId) {
-            setSelectedAdminBizId(business?.id || data[0].business_id);
+            const firstBizId = data[0].businessId || data[0].business_id;
+            setSelectedAdminBizId(business?.id || firstBizId);
           }
         })
         .catch(() => {});
@@ -401,11 +405,15 @@ export const SubscriptionSettingsSection: React.FC = () => {
                   onChange={(e) => setSelectedAdminBizId(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none"
                 >
-                  {adminStores.map((s) => (
-                    <option key={s.business_id} value={s.business_id}>
-                      {s.business_name} ({s.plan} - {s.status})
-                    </option>
-                  ))}
+                  {adminStores.map((s) => {
+                    const bId = s.businessId || s.business_id;
+                    const bName = s.businessName || s.business_name || 'Unnamed Business';
+                    return (
+                      <option key={bId} value={bId}>
+                        {bName} ({s.plan} - {s.status})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -491,6 +499,141 @@ export const SubscriptionSettingsSection: React.FC = () => {
               >
                 Set Quota Count
               </button>
+            </div>
+          </div>
+
+          {/* Full Tenant Subscriber Directory */}
+          <div className="pt-4 border-t border-slate-800 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-bold text-teal-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Subscribers & Tenant Stores ({adminStores.length})</span>
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  Real-time list of all stores, owner details, plan tier, and renewal status.
+                </p>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search store, owner or email..."
+                  value={subscriberSearch}
+                  onChange={(e) => setSubscriberSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-teal-500"
+                />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-slate-800 max-h-96">
+              <table className="w-full text-xs text-left text-slate-300">
+                <thead className="bg-slate-800 text-slate-300 uppercase tracking-wider text-[10px] font-bold sticky top-0 z-10">
+                  <tr>
+                    <th className="p-3">Store & Category</th>
+                    <th className="p-3">Merchant / Owner</th>
+                    <th className="p-3">Plan</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3">Expires / Renews</th>
+                    <th className="p-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/80 bg-slate-900/50">
+                  {adminStores
+                    .filter((s) => {
+                      if (!subscriberSearch.trim()) return true;
+                      const q = subscriberSearch.toLowerCase();
+                      const bName = (s.businessName || s.business_name || '').toLowerCase();
+                      const oName = (s.ownerName || s.owner_name || '').toLowerCase();
+                      const email = (s.ownerEmail || s.owner_email || '').toLowerCase();
+                      const plan = (s.plan || '').toLowerCase();
+                      return bName.includes(q) || oName.includes(q) || email.includes(q) || plan.includes(q);
+                    })
+                    .map((s) => {
+                      const bId = s.businessId || s.business_id;
+                      const bName = s.businessName || s.business_name || 'Store';
+                      const bCat = s.businessCategory || s.business_category || 'General';
+                      const oName = s.ownerName || s.owner_name || 'N/A';
+                      const email = s.ownerEmail || s.owner_email || 'N/A';
+                      const isSelected = selectedAdminBizId === bId;
+
+                      const planBadgeColor: Record<string, string> = {
+                        BUSINESS: 'bg-purple-950/80 text-purple-300 border-purple-800/60',
+                        PRO: 'bg-teal-950/80 text-teal-300 border-teal-800/60',
+                        STARTER: 'bg-blue-950/80 text-blue-300 border-blue-800/60',
+                        FREE_TRIAL: 'bg-amber-950/80 text-amber-300 border-amber-800/60',
+                      };
+
+                      const statusBadgeColor: Record<string, string> = {
+                        active: 'bg-emerald-950/70 text-emerald-400 border-emerald-800/50',
+                        trialing: 'bg-amber-950/70 text-amber-400 border-amber-800/50',
+                        expired: 'bg-red-950/70 text-red-400 border-red-800/50',
+                        cancelled: 'bg-slate-800 text-slate-400 border-slate-700',
+                      };
+
+                      const expiryDate = s.trialEndsAt || s.trial_ends_at || s.currentPeriodEnd || s.current_period_end;
+                      const formattedDate = expiryDate ? new Date(expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Never';
+
+                      return (
+                        <tr
+                          key={bId}
+                          className={`hover:bg-slate-800/40 transition-colors ${
+                            isSelected ? 'bg-teal-950/30' : ''
+                          }`}
+                        >
+                          <td className="p-3">
+                            <div className="font-semibold text-white">{bName}</div>
+                            <div className="text-[10px] text-slate-400 capitalize">{bCat}</div>
+                          </td>
+                          <td className="p-3">
+                            <div className="text-white">{oName}</div>
+                            <div className="text-[10px] text-slate-400">{email}</div>
+                          </td>
+                          <td className="p-3">
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                planBadgeColor[s.plan] || 'bg-slate-800 text-slate-300 border-slate-700'
+                              }`}
+                            >
+                              {s.plan}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                                statusBadgeColor[s.status] || 'bg-slate-800 text-slate-300 border-slate-700'
+                              }`}
+                            >
+                              {s.status}
+                            </span>
+                          </td>
+                          <td className="p-3 text-[11px] text-slate-300">
+                            {formattedDate}
+                          </td>
+                          <td className="p-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedAdminBizId(bId);
+                                const ctrl = document.getElementById('admin-subscription-controls');
+                                ctrl?.scrollIntoView({ behavior: 'smooth' });
+                              }}
+                              className={`px-2.5 py-1 rounded text-[11px] font-bold transition-colors ${
+                                isSelected
+                                  ? 'bg-teal-600 text-white'
+                                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                              }`}
+                            >
+                              {isSelected ? 'Selected' : 'Manage'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

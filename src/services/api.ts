@@ -331,6 +331,16 @@ export const api = {
 
   // Admin APIs (Admin role only)
   getAdminSubscriptions: () => request<any[]>('/api/admin/subscriptions'),
+  getAdminUsers: () => request<any[]>('/api/admin/users'),
+
+  updateAdminUserSubscription: (
+    userId: string,
+    updates: { plan?: string; status?: string; durationDays?: number }
+  ) =>
+    request<any>(`/api/admin/users/${userId}/subscription`, {
+      method: 'POST',
+      body: JSON.stringify(updates),
+    }),
 
   updateAdminSubscription: (businessId: string, updates: { plan?: string; status?: string; extendDays?: number }) =>
     request<any>(`/api/admin/subscriptions/${businessId}`, {

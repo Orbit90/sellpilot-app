@@ -16,6 +16,7 @@ import {
   Share2,
   CheckCircle2,
   Zap,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp, NavSection } from '../context/AppContext';
 import { useSubscription } from '../context/SubscriptionContext';
@@ -108,6 +109,17 @@ export const Navigation: React.FC = () => {
       badgeColor: 'bg-teal-100 text-teal-800',
     },
     { id: 'settings', label: 'Settings', icon: Settings },
+    ...(user?.role === 'admin'
+      ? [
+          {
+            id: 'admin-dashboard' as NavSection,
+            label: 'Admin Portal',
+            icon: ShieldCheck,
+            badge: undefined,
+            badgeColor: 'bg-teal-500/20 text-teal-300',
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -300,10 +312,24 @@ export const Navigation: React.FC = () => {
           <button
             id="mobile-settings-btn"
             onClick={() => setActiveSection('settings')}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className={`p-1.5 rounded-lg transition-colors ${
+              activeSection === 'settings' ? 'text-teal-400 bg-slate-800' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
           >
             <Settings className="w-4 h-4" />
           </button>
+          {user?.role === 'admin' && (
+            <button
+              id="mobile-admin-btn"
+              onClick={() => setActiveSection('admin-dashboard')}
+              title="Admin Portal"
+              className={`p-1.5 rounded-lg transition-colors ${
+                activeSection === 'admin-dashboard' ? 'text-teal-300 bg-teal-900/60 border border-teal-500/40' : 'text-teal-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </header>
 

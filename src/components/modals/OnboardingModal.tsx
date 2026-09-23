@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ArrowRight,
   ArrowLeft,
+  X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { BusinessCategory } from '../../types';
@@ -50,19 +51,19 @@ export const OnboardingModal: React.FC = () => {
     try {
       setIsSubmitting(true);
       await completeOnboarding({
-        name: businessName,
-        category,
-        location,
-        phone,
-        deliveryInfo,
-        paymentInstructions,
-        firstProduct: prodName
+        name: businessName?.trim() || business?.name || 'My Store',
+        category: category || business?.category || 'fashion',
+        location: location?.trim() || '',
+        phone: phone?.trim() || '',
+        deliveryInfo: deliveryInfo?.trim() || '',
+        paymentInstructions: paymentInstructions?.trim() || '',
+        firstProduct: prodName && prodName.trim()
           ? {
-              name: prodName,
-              price: Number(prodPrice) || 0,
-              stockQuantity: Number(prodStock) || 5,
-              description: prodDescription,
-              category,
+              name: prodName.trim(),
+              price: Math.max(0, Number(prodPrice) || 0),
+              stockQuantity: Math.max(1, Number(prodStock) || 5),
+              description: prodDescription?.trim() || '',
+              category: category || 'General',
             }
           : undefined,
       });
@@ -75,10 +76,20 @@ export const OnboardingModal: React.FC = () => {
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         {/* Progress Bar Header */}
-        <div className="bg-slate-900 p-6 text-white">
+        <div className="bg-slate-900 p-6 text-white relative">
           <div className="flex items-center justify-between text-xs text-slate-400 font-semibold mb-2">
             <span>Step {step} of 6</span>
-            <span className="text-teal-400 font-bold">{Math.round((step / 6) * 100)}% Completed</span>
+            <div className="flex items-center gap-3">
+              <span className="text-teal-400 font-bold">{Math.round((step / 6) * 100)}% Completed</span>
+              <button
+                type="button"
+                onClick={handleFinish}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+                title="Skip to Dashboard"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
@@ -313,23 +324,33 @@ export const OnboardingModal: React.FC = () => {
           )}
 
           {step < 6 ? (
-            <button
-              type="button"
-              onClick={() => setStep(step + 1)}
-              className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm"
-            >
-              <span>Continue</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleFinish}
+                className="px-3 py-2 text-slate-400 hover:text-slate-600 text-xs font-semibold"
+              >
+                Skip for now
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep(step + 1)}
+                className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm"
+              >
+                <span>Continue</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
           ) : (
             <button
               type="button"
+              id="onboarding-finish-btn"
               onClick={handleFinish}
               disabled={isSubmitting}
-              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-xs shadow-md flex items-center gap-2"
+              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-xs shadow-md flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed transition-all"
             >
-              <span>Open My Dashboard</span>
-              <Sparkles className="w-4 h-4" />
+              <span>{isSubmitting ? 'Opening Dashboard...' : 'Open My Dashboard'}</span>
+              <Sparkles className={`w-4 h-4 ${isSubmitting ? 'animate-spin' : ''}`} />
             </button>
           )}
         </div>

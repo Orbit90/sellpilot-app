@@ -14,6 +14,7 @@ import {
   MessageCircle,
   MessageSquareText,
   CheckCircle2,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { formatNaira, formatDate, formatRelativeTime } from '../../utils/formatters';
@@ -21,6 +22,7 @@ import { Order, OrderStatus } from '../../types';
 
 export const DashboardView: React.FC = () => {
   const {
+    user,
     business,
     orders,
     customers,
@@ -89,7 +91,19 @@ export const DashboardView: React.FC = () => {
         </div>
 
         {/* Action Shortcuts */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {user?.role === 'admin' && (
+            <button
+              id="dash-quick-admin-btn"
+              onClick={() => setActiveSection('admin-dashboard')}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-bold bg-teal-950 text-teal-300 hover:bg-slate-900 border border-teal-500/40 shadow-sm transition-all"
+              title="Open Admin Subscribers & Users Dashboard"
+            >
+              <ShieldCheck className="w-4 h-4 text-teal-400" />
+              <span>Admin Portal</span>
+            </button>
+          )}
+
           <button
             id="dash-quick-analyzer-btn"
             onClick={() => setActiveSection('conversations')}

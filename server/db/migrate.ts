@@ -174,9 +174,9 @@ async function ensureSubscriptionsAndAdmin(pool: any): Promise<void> {
     
     const adminBizId = 'biz_admin_sellpilot';
     await pool.query(
-      `INSERT INTO businesses (id, owner_id, name, category, description)
-       VALUES ($1, $2, 'SellPilot Administration', 'other', 'System Admin Operations')
-       ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO businesses (id, owner_id, name, category, description, onboarding_completed)
+       VALUES ($1, $2, 'SellPilot Administration', 'other', 'System Admin Operations', TRUE)
+       ON CONFLICT (id) DO UPDATE SET onboarding_completed = TRUE`,
       [adminBizId, adminId]
     );
 

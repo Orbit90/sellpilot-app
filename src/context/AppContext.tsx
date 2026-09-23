@@ -20,7 +20,8 @@ export type NavSection =
   | 'orders'
   | 'ai-assistant'
   | 'follow-ups'
-  | 'settings';
+  | 'settings'
+  | 'admin-dashboard';
 
 interface Toast {
   id: string;
@@ -295,11 +296,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const completeOnboarding = async (data: any) => {
     try {
       const res = await api.completeOnboarding(data);
-      setBusiness(res.business);
+      if (res && res.business) {
+        setBusiness(res.business);
+      }
       setIsOnboarding(false);
       showToast('🎉 Your business is ready to sell! Welcome to your dashboard.');
       setActiveSection('dashboard');
-      await refreshData();
+      try {
+        await refreshData();
+      } catch (refreshErr) {
+        console.warn('Post-onboarding data refresh warning:', refreshErr);
+      }
     } catch (err: any) {
       showToast(err.message || 'Failed to complete onboarding', 'error');
       throw err;

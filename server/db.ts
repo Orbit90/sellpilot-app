@@ -42,6 +42,7 @@ export const db = {
         id: r.id,
         name: r.name,
         email: r.email,
+        role: r.role || 'merchant',
         businessId: r.business_id || '',
         createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
         passwordHash: r.password_hash,

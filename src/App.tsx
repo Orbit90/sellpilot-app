@@ -11,6 +11,7 @@ import { AIAssistantView } from './components/views/AIAssistantView';
 import { ConversationAnalyzerView } from './components/views/ConversationAnalyzerView';
 import { FollowUpsView } from './components/views/FollowUpsView';
 import { SettingsView } from './components/views/SettingsView';
+import { AdminDashboardView } from './components/views/AdminDashboardView';
 import { OnboardingModal } from './components/modals/OnboardingModal';
 import { AuthModal } from './components/modals/AuthModal';
 import { TrialBanner } from './components/subscription/TrialBanner';
@@ -18,7 +19,7 @@ import { UpgradeModal } from './components/subscription/UpgradeModal';
 import { PaymentCallbackView } from './components/views/PaymentCallbackView';
 
 const MainContent: React.FC = () => {
-  const { activeSection, setActiveSection, isLoggedIn, isOnboarding, isInitialized } = useApp();
+  const { activeSection, setActiveSection, isLoggedIn, isOnboarding, isInitialized, user } = useApp();
   const [isCallbackDismissed, setIsCallbackDismissed] = useState(false);
 
   // Check if current URL is the Paystack callback route
@@ -94,6 +95,8 @@ const MainContent: React.FC = () => {
         return <FollowUpsView />;
       case 'settings':
         return <SettingsView />;
+      case 'admin-dashboard':
+        return <AdminDashboardView />;
       default:
         return <DashboardView />;
     }
@@ -114,7 +117,7 @@ const MainContent: React.FC = () => {
       </main>
 
       {/* Overlays and Modals */}
-      {isOnboarding && <OnboardingModal />}
+      {isOnboarding && user?.role !== 'admin' && <OnboardingModal />}
       <UpgradeModal />
       <ToastContainer />
     </div>

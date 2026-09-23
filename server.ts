@@ -676,6 +676,126 @@ async function startServer() {
     }
   });
 
+  // --- ADMIN USERS DIRECTORY & MANAGEMENT ---
+  app.get('/api/admin/users', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const users = await db.users.findAll();
+      const businesses = await db.businesses.findAll();
+      const subscriptions = await db.subscriptions.findAll();
+
+      const combined = users.map((u) => {
+        const biz = businesses.find((b) => b.id === u.businessId || b.ownerId === u.id);
+        const sub = biz ? subscriptions.find((s) => s.businessId === biz.id) : null;
+        return {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role || 'merchant',
+          businessId: biz?.id || u.businessId || '',
+          businessName: biz?.name || 'No Store Created',
+          businessCategory: biz?.category || 'General',
+          plan: sub?.plan || 'FREE_TRIAL',
+          status: sub?.status || 'trialing',
+          subscriptionId: sub?.id || null,
+          trialStartedAt: sub?.trialStartedAt || null,
+          trialEndsAt: sub?.trialEndsAt || null,
+          currentPeriodStart: sub?.currentPeriodStart || null,
+          currentPeriodEnd: sub?.currentPeriodEnd || null,
+          cancelledAt: sub?.cancelledAt || null,
+          createdAt: u.createdAt || biz?.createdAt || new Date().toISOString(),
+        };
+      });
+
+      // Sort newest users first
+      combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      res.json(combined);
+    } catch (err: any) {
+      console.error('Admin users directory error:', err);
+      res.status(500).json({ error: 'Failed to load registered users' });
+    }
+  });
+
+  app.post('/api/admin/users/:userId/subscription', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const { plan, status, durationDays } = req.body;
+
+      const user = await db.users.findById(userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      let biz = user.businessId ? await db.businesses.findById(user.businessId) : null;
+      if (!biz) {
+        const businesses = await db.businesses.findAll();
+        biz = businesses.find((b) => b.ownerId === user.id) || null;
+      }
+
+      let businessId = biz ? biz.id : user.businessId;
+      const now = new Date();
+      if (!businessId) {
+        businessId = 'biz_' + user.id;
+        const newBiz: Business = {
+          id: businessId,
+          ownerId: user.id,
+          name: `${user.name}'s Store`,
+          category: 'other',
+          description: 'Merchant Store',
+          currency: '₦',
+          phone: '',
+          location: 'Lagos, Nigeria',
+          deliveryInfo: '',
+          returnPolicy: '',
+          paymentInstructions: '',
+          faqs: [],
+          createdAt: now.toISOString(),
+          onboardingCompleted: false,
+        };
+        biz = await db.businesses.create(newBiz);
+        await db.users.update(user.id, { businessId });
+      }
+
+      let sub = await db.subscriptions.findByBusinessId(businessId);
+      const days = typeof durationDays === 'number' && durationDays > 0 ? durationDays : 30;
+      const end = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+
+      if (!sub) {
+        sub = await db.subscriptions.create({
+          id: 'sub_' + businessId,
+          businessId,
+          plan: plan || 'STARTER',
+          status: status || 'active',
+          trialStartedAt: now.toISOString(),
+          trialEndsAt: end,
+          currentPeriodStart: now.toISOString(),
+          currentPeriodEnd: end,
+          cancelledAt: null,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        });
+      } else {
+        const updates: any = {};
+        if (plan) updates.plan = plan;
+        if (status) updates.status = status;
+        if (durationDays) {
+          updates.currentPeriodStart = now.toISOString();
+          updates.currentPeriodEnd = end;
+          if (plan === 'FREE_TRIAL') {
+            updates.trialEndsAt = end;
+          }
+        }
+        sub = await db.subscriptions.update(businessId, updates);
+      }
+
+      await db.persist();
+      res.json({ success: true, subscription: sub });
+    } catch (err: any) {
+      console.error('Admin set user subscription error:', err);
+      res.status(500).json({ error: 'Failed to update user subscription' });
+    }
+  });
+
   app.post('/api/admin/subscriptions/:businessId', requireAuth, requireAdmin, async (req, res) => {
     try {
       const { businessId } = req.params;
@@ -785,39 +905,74 @@ async function startServer() {
   app.post('/api/business/onboarding', requireAuth, async (req, res) => {
     try {
       const businessId = req.businessId!;
-      const { name, category, location, phone, firstProduct, deliveryInfo, paymentInstructions } = req.body;
+      const { name, category, location, phone, firstProduct, deliveryInfo, paymentInstructions } = req.body || {};
 
-      const updatedBiz = await db.businesses.update(businessId, {
-        name: name ? name.trim() : undefined,
-        category: category || undefined,
-        location: location ? location.trim() : undefined,
-        phone: phone ? phone.trim() : undefined,
-        deliveryInfo: deliveryInfo ? deliveryInfo.trim() : undefined,
-        paymentInstructions: paymentInstructions ? paymentInstructions.trim() : undefined,
+      const updates: Partial<Business> = {
         onboardingCompleted: true,
-      });
+      };
 
-      // Optionally add their first product
-      if (firstProduct && firstProduct.name && firstProduct.price) {
-        await db.products.create({
-          id: `prd_${Date.now()}`,
-          businessId,
-          name: firstProduct.name.trim(),
-          price: Math.max(0, Math.round(Number(firstProduct.price) || 0)),
-          category: category || 'General',
-          description: firstProduct.description ? firstProduct.description.trim() : '',
-          images: firstProduct.image ? [firstProduct.image] : [],
-          stockQuantity: Math.max(0, Math.round(Number(firstProduct.stock) || 10)),
-          sku: `SKU-${Date.now().toString().slice(-4)}`,
-          status: 'active',
-          variants: [],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
-        await recordMetricUsage(businessId, 'product');
+      if (name && typeof name === 'string' && name.trim()) {
+        updates.name = name.trim();
+      }
+      if (category && typeof category === 'string') {
+        updates.category = category as any;
+      }
+      if (location !== undefined && location !== null) {
+        updates.location = typeof location === 'string' ? location.trim() : String(location);
+      }
+      if (phone !== undefined && phone !== null) {
+        updates.phone = typeof phone === 'string' ? phone.trim() : String(phone);
+      }
+      if (deliveryInfo !== undefined && deliveryInfo !== null) {
+        updates.deliveryInfo = typeof deliveryInfo === 'string' ? deliveryInfo.trim() : String(deliveryInfo);
+      }
+      if (paymentInstructions !== undefined && paymentInstructions !== null) {
+        updates.paymentInstructions = typeof paymentInstructions === 'string' ? paymentInstructions.trim() : String(paymentInstructions);
       }
 
-      await db.persist();
+      let updatedBiz = await db.businesses.update(businessId, updates);
+      if (!updatedBiz) {
+        updatedBiz = await db.businesses.findById(businessId);
+      }
+
+      // Optionally add their first product if provided
+      if (firstProduct && typeof firstProduct === 'object' && firstProduct.name && String(firstProduct.name).trim()) {
+        try {
+          const rawPrice = Number(firstProduct.price) || 0;
+          const rawStock = Number(firstProduct.stockQuantity ?? firstProduct.stock) || 5;
+          const prodCategory = (firstProduct.category && String(firstProduct.category).trim()) || updatedBiz?.category || 'General';
+          const prodDesc = firstProduct.description ? String(firstProduct.description).trim() : '';
+          const prodImages = Array.isArray(firstProduct.images) && firstProduct.images.length
+            ? firstProduct.images
+            : (firstProduct.image ? [String(firstProduct.image)] : []);
+
+          await db.products.create({
+            id: `prd_${Date.now()}`,
+            businessId,
+            name: String(firstProduct.name).trim(),
+            price: Math.max(0, Math.round(rawPrice)),
+            category: prodCategory,
+            description: prodDesc,
+            images: prodImages,
+            stockQuantity: Math.max(0, Math.round(rawStock)),
+            sku: `SKU-${Date.now().toString().slice(-4)}`,
+            status: 'active',
+            variants: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+          await recordMetricUsage(businessId, 'product');
+        } catch (prodErr) {
+          console.warn('Non-fatal first product creation error during onboarding:', prodErr);
+        }
+      }
+
+      try {
+        await db.persist();
+      } catch (persistErr) {
+        console.warn('Non-fatal persistence warning in onboarding:', persistErr);
+      }
+
       res.json({ success: true, business: updatedBiz });
     } catch (err: any) {
       console.error('Onboarding update error:', err);

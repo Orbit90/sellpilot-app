@@ -12,6 +12,8 @@ import {
   RefreshCw,
   LogOut,
   CheckCircle2,
+  Users,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { BusinessCategory, ResponseTone } from '../../types';
@@ -22,6 +24,7 @@ export const SettingsView: React.FC = () => {
     business,
     user,
     settings,
+    setActiveSection,
     updateBusinessProfile,
     updateSettings,
     resetToDemoData,
@@ -131,14 +134,27 @@ export const SettingsView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={handleSaveAll}
-          disabled={isSaving}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm bg-teal-600 hover:bg-teal-500 text-white shadow-sm transition-colors shrink-0 disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          <span>{isSaving ? 'Saving...' : 'Save Settings'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {user?.role === 'admin' && (
+            <button
+              type="button"
+              onClick={() => setActiveSection('admin-dashboard')}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl font-bold text-xs bg-slate-900 hover:bg-slate-800 text-teal-300 border border-slate-700 shadow-sm transition-colors shrink-0"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+              <span>Admin Dashboard</span>
+            </button>
+          )}
+
+          <button
+            onClick={handleSaveAll}
+            disabled={isSaving}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm bg-teal-600 hover:bg-teal-500 text-white shadow-sm transition-colors shrink-0 disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            <span>{isSaving ? 'Saving...' : 'Save Settings'}</span>
+          </button>
+        </div>
       </div>
 
       <form onSubmit={handleSaveAll} className="space-y-6">
