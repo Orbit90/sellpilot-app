@@ -33,6 +33,23 @@ export async function runMigrations(): Promise<void> {
     schemaSql = fs.readFileSync(schemaPath, 'utf-8');
   }
 
+  // Pre-schema column additions to ensure existing tables have required columns before indices are created
+  try {
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users') THEN
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'merchant';
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE;
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ DEFAULT NOW();
+        END IF;
+      END
+      $$;
+    `);
+  } catch {
+    // Non-fatal if table doesn't exist yet or if using non-standard dialect
+  }
+
   if (schemaSql) {
     try {
       await pool.query(schemaSql);
@@ -76,6 +93,34 @@ export async function runMigrations(): Promise<void> {
   // Ensure subscription schema, existing tenant subscriptions, and admin account
   await ensureSubscriptionsAndAdmin(pool);
   console.log('Subscription infrastructure and admin architecture synchronized.');
+
+  // Ensure email verification schema & migration for existing users
+  await ensureEmailVerificationSchema(pool);
+  console.log('Email verification architecture synchronized.');
+}
+
+async function ensureEmailVerificationSchema(pool: any): Promise<void> {
+  // 1. Ensure email verification columns exist on users table
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ DEFAULT NOW();
+  `);
+
+  // 2. Ensure email_verification_tokens table exists
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_verification_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_evt_token_hash ON email_verification_tokens(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_evt_user_id ON email_verification_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users(email_verified);
+  `);
 }
 
 async function ensureSubscriptionsAndAdmin(pool: any): Promise<void> {

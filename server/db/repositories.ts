@@ -57,6 +57,8 @@ export const usersRepo = {
       email: r.email,
       businessId: r.business_id || '',
       role: (r.role as UserRole) || 'merchant',
+      emailVerified: r.email_verified === undefined || r.email_verified === null ? true : !!r.email_verified,
+      emailVerifiedAt: r.email_verified_at ? new Date(r.email_verified_at).toISOString() : null,
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
       passwordHash: r.password_hash,
       passwordSalt: r.password_salt,
@@ -73,6 +75,8 @@ export const usersRepo = {
       email: r.email,
       businessId: r.business_id || '',
       role: (r.role as UserRole) || 'merchant',
+      emailVerified: r.email_verified === undefined || r.email_verified === null ? true : !!r.email_verified,
+      emailVerifiedAt: r.email_verified_at ? new Date(r.email_verified_at).toISOString() : null,
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
       passwordHash: r.password_hash,
       passwordSalt: r.password_salt,
@@ -80,9 +84,12 @@ export const usersRepo = {
   },
 
   async create(user: User): Promise<User> {
+    const emailVerified = user.emailVerified !== undefined ? user.emailVerified : true;
+    const emailVerifiedAt = user.emailVerifiedAt !== undefined ? user.emailVerifiedAt : (emailVerified ? new Date().toISOString() : null);
+
     await query(
-      `INSERT INTO users (id, name, email, business_id, role, password_hash, password_salt, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO users (id, name, email, business_id, role, password_hash, password_salt, email_verified, email_verified_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
          email = EXCLUDED.email,
@@ -90,6 +97,8 @@ export const usersRepo = {
          role = EXCLUDED.role,
          password_hash = EXCLUDED.password_hash,
          password_salt = EXCLUDED.password_salt,
+         email_verified = EXCLUDED.email_verified,
+         email_verified_at = EXCLUDED.email_verified_at,
          updated_at = NOW()`,
       [
         user.id,
@@ -99,11 +108,17 @@ export const usersRepo = {
         user.role || 'merchant',
         user.passwordHash || null,
         user.passwordSalt || null,
+        emailVerified,
+        emailVerifiedAt ? new Date(emailVerifiedAt).toISOString() : null,
         user.createdAt ? new Date(user.createdAt).toISOString() : new Date().toISOString(),
         new Date().toISOString(),
       ]
     );
-    return user;
+    return {
+      ...user,
+      emailVerified,
+      emailVerifiedAt,
+    };
   },
 
   async update(id: string, updates: Partial<User>): Promise<User | null> {
@@ -116,15 +131,35 @@ export const usersRepo = {
     const role = updates.role !== undefined ? updates.role : existing.role || 'merchant';
     const passwordHash = updates.passwordHash !== undefined ? updates.passwordHash : existing.passwordHash;
     const passwordSalt = updates.passwordSalt !== undefined ? updates.passwordSalt : existing.passwordSalt;
+    const emailVerified = updates.emailVerified !== undefined ? updates.emailVerified : existing.emailVerified;
+    const emailVerifiedAt = updates.emailVerifiedAt !== undefined ? updates.emailVerifiedAt : existing.emailVerifiedAt;
 
     await query(
       `UPDATE users
-       SET name = $1, email = $2, business_id = $3, role = $4, password_hash = $5, password_salt = $6, updated_at = NOW()
-       WHERE id = $7`,
-      [name, email, businessId || null, role, passwordHash || null, passwordSalt || null, id]
+       SET name = $1, email = $2, business_id = $3, role = $4, password_hash = $5, password_salt = $6, email_verified = $7, email_verified_at = $8, updated_at = NOW()
+       WHERE id = $9`,
+      [
+        name,
+        email,
+        businessId || null,
+        role,
+        passwordHash || null,
+        passwordSalt || null,
+        emailVerified ?? true,
+        emailVerifiedAt ? new Date(emailVerifiedAt).toISOString() : null,
+        id,
+      ]
     );
 
     return usersRepo.findById(id);
+  },
+
+  async verifyEmail(userId: string): Promise<User | null> {
+    await query(
+      `UPDATE users SET email_verified = TRUE, email_verified_at = NOW(), updated_at = NOW() WHERE id = $1`,
+      [userId]
+    );
+    return usersRepo.findById(userId);
   },
 
   async delete(id: string): Promise<boolean> {
@@ -2196,6 +2231,93 @@ export const paymentsRepo = {
       metadata: safeJsonParse(r.metadata, {}),
       createdAt: new Date(r.created_at).toISOString(),
       updatedAt: new Date(r.updated_at).toISOString(),
+    };
+  },
+};
+
+// ==========================================
+// 12. EMAIL VERIFICATION TOKENS REPOSITORY
+// ==========================================
+export interface VerificationTokenRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: string;
+  usedAt: string | null;
+  createdAt: string;
+}
+
+export const verificationTokensRepo = {
+  async create(token: { id: string; userId: string; tokenHash: string; expiresAt: Date }): Promise<VerificationTokenRecord> {
+    await query(
+      `INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, NOW())`,
+      [token.id, token.userId, token.tokenHash, token.expiresAt.toISOString()]
+    );
+    return {
+      id: token.id,
+      userId: token.userId,
+      tokenHash: token.tokenHash,
+      expiresAt: token.expiresAt.toISOString(),
+      usedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+  },
+
+  async findByHash(tokenHash: string): Promise<VerificationTokenRecord | null> {
+    const res = await query(
+      `SELECT * FROM email_verification_tokens WHERE token_hash = $1`,
+      [tokenHash]
+    );
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      userId: r.user_id,
+      tokenHash: r.token_hash,
+      expiresAt: new Date(r.expires_at).toISOString(),
+      usedAt: r.used_at ? new Date(r.used_at).toISOString() : null,
+      createdAt: new Date(r.created_at).toISOString(),
+    };
+  },
+
+  async markUsed(id: string): Promise<void> {
+    await query(
+      `UPDATE email_verification_tokens SET used_at = NOW() WHERE id = $1`,
+      [id]
+    );
+  },
+
+  async invalidateAllForUser(userId: string): Promise<void> {
+    await query(
+      `UPDATE email_verification_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`,
+      [userId]
+    );
+  },
+
+  async countRecentRequests(userId: string, minutes: number = 60): Promise<number> {
+    const res = await query(
+      `SELECT COUNT(*) as count FROM email_verification_tokens
+       WHERE user_id = $1 AND created_at > NOW() - ($2 || ' minutes')::INTERVAL`,
+      [userId, minutes.toString()]
+    );
+    return parseInt(res.rows[0]?.count || '0', 10);
+  },
+
+  async getLatestForUser(userId: string): Promise<VerificationTokenRecord | null> {
+    const res = await query(
+      `SELECT * FROM email_verification_tokens WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [userId]
+    );
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      userId: r.user_id,
+      tokenHash: r.token_hash,
+      expiresAt: new Date(r.expires_at).toISOString(),
+      usedAt: r.used_at ? new Date(r.used_at).toISOString() : null,
+      createdAt: new Date(r.created_at).toISOString(),
     };
   },
 };

@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL DEFAULT 'merchant',
   password_hash TEXT,
   password_salt TEXT,
+  email_verified BOOLEAN NOT NULL DEFAULT TRUE,
+  email_verified_at TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -312,3 +314,17 @@ CREATE INDEX IF NOT EXISTS idx_usage_records_biz_metric ON usage_records(busines
 CREATE INDEX IF NOT EXISTS idx_payments_business_id ON payments(business_id);
 CREATE INDEX IF NOT EXISTS idx_payments_reference ON payments(reference);
 CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+
+-- 12. EMAIL VERIFICATION TOKENS
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evt_token_hash ON email_verification_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_evt_user_id ON email_verification_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users(email_verified);

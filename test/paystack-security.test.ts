@@ -16,6 +16,7 @@
  */
 
 import crypto from 'crypto';
+import { spawn, ChildProcess } from 'child_process';
 import { db } from '../server/db';
 import { processVerifiedPayment } from '../server/services/paymentVerificationService';
 import { paystackService } from '../server/services/paystackService';
@@ -29,11 +30,44 @@ interface TestResult {
   error?: string;
 }
 
+let serverProcess: ChildProcess | null = null;
+
+async function ensureServerRunning() {
+  try {
+    const res = await fetch(`${BASE_URL}/api/plans`, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) return;
+  } catch {
+    // Server not running, spawn it
+  }
+
+  console.log('Test server not detected on port 3000. Starting local server for test execution...');
+  serverProcess = spawn('npx', ['tsx', 'server.ts'], {
+    env: { ...process.env, PORT: '3000' },
+    stdio: 'ignore',
+  });
+
+  // Wait for server to become responsive
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      const res = await fetch(`${BASE_URL}/api/plans`, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) {
+        console.log('Test server is up and responsive on port 3000.\n');
+        return;
+      }
+    } catch {
+      // keep waiting
+    }
+  }
+  console.warn('Timed out waiting for test server on port 3000.');
+}
+
 async function runSecurityTests() {
   console.log('=====================================================');
   console.log('--- STARTING PAYSTACK INTEGRATION SECURITY TESTS ---');
   console.log('=====================================================\n');
 
+  await ensureServerRunning();
   await db.init();
 
   const results: TestResult[] = [];
@@ -771,6 +805,12 @@ async function runSecurityTests() {
   console.log(`Total: ${total} | Passed: ${passedCount} | Failed: ${failedCount}`);
   console.log('=====================================================');
 
+  if (serverProcess) {
+    try {
+      serverProcess.kill();
+    } catch {}
+  }
+
   if (failedCount > 0) {
     process.exit(1);
   }
@@ -778,6 +818,11 @@ async function runSecurityTests() {
 }
 
 runSecurityTests().catch((err) => {
+  if (serverProcess) {
+    try {
+      serverProcess.kill();
+    } catch {}
+  }
   console.error('Security test suite fatal error:', err);
   process.exit(1);
 });

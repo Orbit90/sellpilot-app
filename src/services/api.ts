@@ -103,6 +103,18 @@ export const api = {
       body: JSON.stringify({ email }),
     }),
 
+  verifyEmail: (token: string) =>
+    request<{ success: boolean; message: string; user?: User }>('/api/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+
+  resendVerification: (email?: string) =>
+    request<{ success: boolean; message: string; alreadyVerified?: boolean }>('/api/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
   completeOnboarding: (data: any) =>
     request<{ business: Business }>('/api/business/onboarding', {
       method: 'POST',

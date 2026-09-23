@@ -45,6 +45,8 @@ interface AppContextType {
   logout: () => Promise<void>;
   quickSwitchToDemo: () => Promise<void>;
   completeOnboarding: (data: any) => Promise<void>;
+  verifyEmail: (token: string) => Promise<{ success: boolean; message: string; expired?: boolean; error?: string }>;
+  resendVerification: (email?: string) => Promise<{ success: boolean; message: string; error?: string }>;
 
   // Data
   products: Product[];
@@ -310,6 +312,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err: any) {
       showToast(err.message || 'Failed to complete onboarding', 'error');
       throw err;
+    }
+  };
+
+  const verifyEmail = async (token: string) => {
+    try {
+      const res = await api.verifyEmail(token);
+      if (res.user) {
+        setUser(res.user);
+      } else if (user) {
+        setUser({ ...user, emailVerified: true, emailVerifiedAt: new Date().toISOString() });
+      }
+      showToast('🎉 Email verified successfully! Full account features unlocked.', 'success');
+      return { success: true, message: res.message };
+    } catch (err: any) {
+      const message = err.message || 'Verification failed';
+      showToast(message, 'error');
+      return {
+        success: false,
+        message,
+        expired: err.expired || message.toLowerCase().includes('expired'),
+        error: message,
+      };
+    }
+  };
+
+  const resendVerification = async (email?: string) => {
+    try {
+      const targetEmail = email || user?.email;
+      const res = await api.resendVerification(targetEmail);
+      showToast(res.message || 'Verification email sent! Please check your inbox.', 'info');
+      return { success: true, message: res.message };
+    } catch (err: any) {
+      const message = err.message || 'Failed to resend verification email';
+      showToast(message, 'error');
+      return { success: false, message, error: message };
     }
   };
 
@@ -598,6 +635,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         quickSwitchToDemo,
         completeOnboarding,
+        verifyEmail,
+        resendVerification,
         products,
         customers,
         orders,

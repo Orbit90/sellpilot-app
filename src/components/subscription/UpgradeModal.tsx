@@ -28,17 +28,32 @@ export const UpgradeModal: React.FC = () => {
     isAdmin,
   } = useSubscription();
 
-  const { business, showToast } = useApp();
+  const { business, user, resendVerification, showToast } = useApp();
   const [activePlanId, setActivePlanId] = useState<SubscriptionPlanId>(
     selectedUpgradePlan || 'PRO'
   );
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isResendingVerify, setIsResendingVerify] = useState(false);
+  const [verifyNotice, setVerifyNotice] = useState<string | null>(null);
   const [checkoutResult, setCheckoutResult] = useState<{
     reference: string;
     amountNaira: number;
     planName: string;
     message: string;
   } | null>(null);
+
+  const handleResendInModal = async () => {
+    if (!user?.email || isResendingVerify) return;
+    setIsResendingVerify(true);
+    try {
+      const res = await resendVerification(user.email);
+      setVerifyNotice(res.message || 'Verification link sent to your email.');
+    } catch {
+      setVerifyNotice('Failed to send verification link.');
+    } finally {
+      setIsResendingVerify(false);
+    }
+  };
 
   useEffect(() => {
     if (selectedUpgradePlan) {
@@ -75,6 +90,11 @@ export const UpgradeModal: React.FC = () => {
 
     if (targetPlan === currentPlanId && subscription?.isActive) {
       showToast('You are already on this plan', 'info');
+      return;
+    }
+
+    if (user?.emailVerified === false) {
+      showToast('Please verify your email address before activating or upgrading a subscription.', 'error');
       return;
     }
 
@@ -189,6 +209,27 @@ export const UpgradeModal: React.FC = () => {
 
           {/* Scrollable Content Body */}
           <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-5 overscroll-contain">
+            {user?.emailVerified === false && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-amber-900">
+                <div className="flex items-center gap-2.5">
+                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                  <div>
+                    <span className="font-bold text-amber-950">Email Verification Required: </span>
+                    <span>Please verify <strong>{user.email}</strong> before activating or purchasing a plan.</span>
+                    {verifyNotice && <p className="text-emerald-700 font-semibold mt-0.5">{verifyNotice}</p>}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResendInModal}
+                  disabled={isResendingVerify}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs transition-colors shrink-0 disabled:opacity-50"
+                >
+                  {isResendingVerify ? 'Sending...' : 'Resend Email'}
+                </button>
+              </div>
+            )}
+
             {checkoutResult ? (
               /* Checkout Intermediary / Integration Pending Notice */
               <div

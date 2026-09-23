@@ -27,6 +27,12 @@ import { paymentProvider } from './server/services/paymentProvider';
 import { paystackService } from './server/services/paystackService';
 import { processVerifiedPayment } from './server/services/paymentVerificationService';
 import { PLAN_CONFIGS, getPlanConfig, SubscriptionPlanId } from './src/config/plans';
+import {
+  generateVerificationToken,
+  hashVerificationToken,
+  sendVerificationEmail,
+  checkEmailResendRateLimit,
+} from './server/services/emailService';
 
 declare global {
   namespace Express {
@@ -177,6 +183,8 @@ async function startServer() {
         email: normalizedEmail,
         businessId,
         role: 'merchant',
+        emailVerified: false,
+        emailVerifiedAt: null,
         passwordHash: hash,
         passwordSalt: salt,
         createdAt: new Date().toISOString(),
@@ -184,6 +192,28 @@ async function startServer() {
 
       await db.businesses.create(newBiz);
       await db.users.create(newUser);
+
+      // Generate cryptographically secure verification token and record in database
+      const { rawToken, tokenHash, expiresAt: tokenExpiresAt } = generateVerificationToken();
+      await db.verificationTokens.create({
+        id: `evt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+        userId,
+        tokenHash,
+        expiresAt: tokenExpiresAt,
+      });
+
+      // Dispatch verification email in background without blocking signup
+      const origin = (req.headers.origin as string) || (req.headers.host ? `${req.protocol}://${req.headers.host}` : undefined);
+      try {
+        await sendVerificationEmail({
+          toEmail: normalizedEmail,
+          userName: newUser.name,
+          rawToken,
+          reqOrigin: origin,
+        });
+      } catch (emailErr) {
+        console.error('Failed to send initial verification email:', emailErr);
+      }
 
       // Automatically provision 7-Day FREE TRIAL subscription for new merchant
       // Client-provided plan or expiry dates are strictly disregarded!
@@ -350,6 +380,159 @@ async function startServer() {
     }
   });
 
+  // --- EMAIL VERIFICATION ENDPOINTS ---
+
+  // POST /api/auth/verify-email
+  // Verifies the user's email address using the one-time cryptographically secure token
+  app.post('/api/auth/verify-email', async (req, res) => {
+    try {
+      const { token } = req.body;
+      if (!token || typeof token !== 'string' || !token.trim()) {
+        return res.status(400).json({ error: 'Verification token is required.' });
+      }
+
+      const tokenHash = hashVerificationToken(token.trim());
+      const record = await db.verificationTokens.findByHash(tokenHash);
+
+      if (!record) {
+        return res.status(400).json({
+          error: 'Invalid verification link. Please check your email or request a new one.',
+          code: 'TOKEN_INVALID',
+        });
+      }
+
+      if (record.usedAt) {
+        return res.status(400).json({
+          error: 'This verification link has already been used. Please sign in to your account.',
+          code: 'TOKEN_ALREADY_USED',
+        });
+      }
+
+      if (new Date(record.expiresAt).getTime() < Date.now()) {
+        return res.status(400).json({
+          error: 'This verification link has expired (verification links are valid for 24 hours). Please request a new one.',
+          code: 'TOKEN_EXPIRED',
+          expired: true,
+        });
+      }
+
+      // 1. Invalidate/mark this token as used
+      await db.verificationTokens.markUsed(record.id);
+
+      // 2. Invalidate all older unused tokens for this user
+      await db.verificationTokens.invalidateAllForUser(record.userId);
+
+      // 3. Mark user's email as verified in PostgreSQL
+      const updatedUser = await db.users.verifyEmail(record.userId);
+      if (!updatedUser) {
+        return res.status(404).json({ error: 'User account not found.' });
+      }
+
+      await db.persist();
+
+      return res.json({
+        success: true,
+        message: 'Your email address has been successfully verified! You now have full access to SellPilot.',
+        user: sanitizeUser(updatedUser),
+      });
+    } catch (err: any) {
+      console.error('Email verification error:', err);
+      return res.status(500).json({ error: 'Failed to verify email. Please try again later.' });
+    }
+  });
+
+  // POST /api/auth/resend-verification
+  // Resends a verification email with rate-limiting and anti-enumeration protection
+  app.post('/api/auth/resend-verification', async (req, res) => {
+    try {
+      let email = (req.body?.email || '').toString().trim().toLowerCase();
+
+      // Fallback to Bearer token if user is signed in
+      if (!email) {
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          const sessionToken = authHeader.substring(7).trim();
+          const session = await db.sessions.findByToken(sessionToken);
+          if (session) {
+            const user = await db.users.findById(session.userId);
+            if (user) {
+              email = user.email.toLowerCase().trim();
+            }
+          }
+        }
+      }
+
+      if (!email) {
+        return res.status(400).json({ error: 'Email address is required.' });
+      }
+
+      // Check rate limit by IP + Email
+      const clientIp = (req.headers['x-forwarded-for'] as string) || req.ip || 'anonymous';
+      const rateKey = `${clientIp}_${email}`;
+      const rateCheck = checkEmailResendRateLimit(rateKey);
+      if (!rateCheck.allowed) {
+        return res.status(429).json({
+          error: rateCheck.reason || `Please wait ${rateCheck.retryAfterSeconds}s before requesting another verification email.`,
+          retryAfterSeconds: rateCheck.retryAfterSeconds,
+        });
+      }
+
+      const user = await db.users.findByEmail(email);
+
+      // Security requirement 5: Do not reveal whether an email exists
+      if (!user) {
+        return res.json({
+          success: true,
+          message: 'If an account exists with this email, a verification link has been sent.',
+        });
+      }
+
+      // If user is already verified
+      if (user.emailVerified) {
+        return res.json({
+          success: true,
+          message: 'This email address is already verified. You can sign in directly.',
+          alreadyVerified: true,
+        });
+      }
+
+      // Invalidate previous tokens
+      await db.verificationTokens.invalidateAllForUser(user.id);
+
+      // Generate a new secure token
+      const { rawToken, tokenHash, expiresAt } = generateVerificationToken();
+      await db.verificationTokens.create({
+        id: `evt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      });
+
+      await db.persist();
+
+      // Dispatch email
+      const origin = (req.headers.origin as string) || (req.headers.host ? `${req.protocol}://${req.headers.host}` : undefined);
+      try {
+        await sendVerificationEmail({
+          toEmail: user.email,
+          userName: user.name,
+          rawToken,
+          reqOrigin: origin,
+        });
+      } catch (emailErr) {
+        console.error('Failed to resend verification email:', emailErr);
+      }
+
+      return res.json({
+        success: true,
+        message: 'A fresh verification link has been sent to your email address. Please check your inbox.',
+      });
+    } catch (err: any) {
+      console.error('Resend verification error:', err);
+      return res.status(500).json({ error: 'Failed to resend verification email. Please try again.' });
+    }
+  });
+
   // --- COMMERCIAL SUBSCRIPTION & BILLING APIS ---
   app.get('/api/plans', (_req, res) => {
     res.json(Object.values(PLAN_CONFIGS));
@@ -431,6 +614,15 @@ async function startServer() {
   // 10. Handles errors safely without exposing secret keys
   app.post('/api/payments/paystack/initialize', requireAuth, async (req, res) => {
     try {
+      // Require email verification before purchasing/activating subscription
+      if (req.user && req.user.emailVerified === false) {
+        return res.status(403).json({
+          status: false,
+          error: 'Please verify your email address before activating or upgrading a subscription.',
+          code: 'EMAIL_VERIFICATION_REQUIRED',
+        });
+      }
+
       const planRaw = (req.body.plan || req.body.planId || '').toString().trim().toUpperCase();
 
       // Accept ONLY plan identifiers: STARTER, PRO, BUSINESS

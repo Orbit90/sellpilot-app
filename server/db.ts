@@ -11,6 +11,7 @@ import {
   subscriptionsRepo,
   usageRepo,
   paymentsRepo,
+  verificationTokensRepo,
   resetDemoData,
 } from './db/repositories';
 import { runMigrations, createRelationalSnapshot } from './db/migrate';
@@ -44,6 +45,8 @@ export const db = {
         email: r.email,
         role: r.role || 'merchant',
         businessId: r.business_id || '',
+        emailVerified: r.email_verified === undefined || r.email_verified === null ? true : !!r.email_verified,
+        emailVerifiedAt: r.email_verified_at ? new Date(r.email_verified_at).toISOString() : null,
         createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
         passwordHash: r.password_hash,
         passwordSalt: r.password_salt,
@@ -83,6 +86,7 @@ export const db = {
   subscriptions: subscriptionsRepo,
   usage: usageRepo,
   payments: paymentsRepo,
+  verificationTokens: verificationTokensRepo,
 
   // Legacy state accessor for quick demo bootstrap
   getState: () => {

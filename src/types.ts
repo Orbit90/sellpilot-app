@@ -71,6 +71,8 @@ export interface User {
   email: string;
   businessId: string;
   role?: UserRole;
+  emailVerified?: boolean;
+  emailVerifiedAt?: string | null;
   createdAt: string;
   passwordHash?: string;
   passwordSalt?: string;

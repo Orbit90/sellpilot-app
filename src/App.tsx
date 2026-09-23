@@ -17,10 +17,23 @@ import { AuthModal } from './components/modals/AuthModal';
 import { TrialBanner } from './components/subscription/TrialBanner';
 import { UpgradeModal } from './components/subscription/UpgradeModal';
 import { PaymentCallbackView } from './components/views/PaymentCallbackView';
+import { EmailVerificationBanner } from './components/EmailVerificationBanner';
+import { EmailVerificationView } from './components/views/EmailVerificationView';
 
 const MainContent: React.FC = () => {
   const { activeSection, setActiveSection, isLoggedIn, isOnboarding, isInitialized, user } = useApp();
   const [isCallbackDismissed, setIsCallbackDismissed] = useState(false);
+  const [isVerificationDismissed, setIsVerificationDismissed] = useState(false);
+
+  // Check if current URL is email verification link
+  const isEmailVerification =
+    !isVerificationDismissed &&
+    typeof window !== 'undefined' &&
+    (window.location.pathname.startsWith('/verify-email') ||
+      window.location.search.includes('verify_token=') ||
+      (window.location.search.includes('token=') &&
+        !window.location.search.includes('trxref=') &&
+        !window.location.search.includes('reference=')));
 
   // Check if current URL is the Paystack callback route
   const isPaymentCallback =
@@ -41,6 +54,28 @@ const MainContent: React.FC = () => {
           </div>
           <p className="text-xs font-semibold text-slate-400">Loading SellPilot...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Handle Email Verification view (accessible even when unauthenticated)
+  if (isEmailVerification) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased">
+        <EmailVerificationView
+          onDismiss={() => {
+            try {
+              window.history.replaceState({}, document.title, '/');
+            } catch {
+              // ignore
+            }
+            setIsVerificationDismissed(true);
+            if (isLoggedIn) {
+              setActiveSection('dashboard');
+            }
+          }}
+        />
+        <ToastContainer />
       </div>
     );
   }
@@ -103,18 +138,23 @@ const MainContent: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col md:flex-row antialiased">
-      {/* Navigation */}
-      <Navigation />
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased">
+      {/* Email Verification Banner */}
+      <EmailVerificationBanner />
 
-      {/* Main View Area */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl w-full mx-auto pb-24 md:pb-12">
-          {/* Subscription / Free Trial Alert Banner */}
-          <TrialBanner />
-          {renderSection()}
-        </div>
-      </main>
+      <div className="flex-1 flex flex-col md:flex-row min-w-0">
+        {/* Navigation */}
+        <Navigation />
+
+        {/* Main View Area */}
+        <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+          <div className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl w-full mx-auto pb-24 md:pb-12">
+            {/* Subscription / Free Trial Alert Banner */}
+            <TrialBanner />
+            {renderSection()}
+          </div>
+        </main>
+      </div>
 
       {/* Overlays and Modals */}
       {isOnboarding && user?.role !== 'admin' && <OnboardingModal />}
