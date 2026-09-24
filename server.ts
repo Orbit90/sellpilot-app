@@ -4,6 +4,7 @@ dotenv.config();
 import express from 'express';
 import crypto from 'crypto';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { db } from './server/db';
 import { analyzeConversation, generateAIReply, generateFollowUpMessage } from './server/gemini';
@@ -53,8 +54,8 @@ async function startServer() {
   await db.init();
 
   const app = express();
-  // On Render/external hosts, listen on assigned process.env.PORT. In the AI Studio container sandbox, bind to 3000.
-  const PORT = process.env.APPLET_ID ? 3000 : (Number(process.env.PORT) || 3000);
+  // On Render/external hosts, listen on assigned process.env.PORT (defaults to 3000)
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(
     express.json({
@@ -324,19 +325,35 @@ async function startServer() {
     }
   });
 
-  // Demo 1-Click Login: creates authenticated session for DEMO store
+  // Demo 1-Click Login: creates authenticated session for dedicated DEMO store ONLY
   app.post('/api/auth/demo', async (req, res) => {
     try {
-      const allUsers = await db.users.findAll();
-      const demoUser = (await db.users.findById(DEMO_USER_ID)) || allUsers[0];
-      if (!demoUser) {
-        return res.status(500).json({ error: 'Demo store user not initialized' });
+      // 1. Production gate: /api/auth/demo is disabled in production unless explicitly enabled via environment variable
+      const isProduction = process.env.NODE_ENV === 'production';
+      const isDemoExplicitlyEnabled = process.env.ENABLE_DEMO_LOGIN === 'true';
+
+      if (isProduction && !isDemoExplicitlyEnabled) {
+        return res.status(403).json({
+          error: 'Demo authentication is disabled in production environments. Set ENABLE_DEMO_LOGIN=true to explicitly enable.',
+        });
       }
 
-      const allBiz = await db.businesses.findAll();
-      const demoBiz = (await db.businesses.findById(demoUser.businessId)) || allBiz[0];
-      if (!demoBiz) {
-        return res.status(500).json({ error: 'Demo store profile not initialized' });
+      // 2. Strict dedicated demo account verification:
+      // Absolutely NO fallback to allUsers[0] or any arbitrary existing user.
+      const demoUser = await db.users.findById(DEMO_USER_ID);
+      if (!demoUser || demoUser.id !== DEMO_USER_ID) {
+        return res.status(404).json({
+          error: 'Dedicated demo user account not found or not initialized.',
+        });
+      }
+
+      // 3. Strict dedicated demo business verification:
+      // Absolutely NO fallback to allBiz[0] or any arbitrary existing business.
+      const demoBiz = await db.businesses.findById(DEMO_BUSINESS_ID);
+      if (!demoBiz || demoBiz.id !== DEMO_BUSINESS_ID || demoUser.businessId !== DEMO_BUSINESS_ID) {
+        return res.status(404).json({
+          error: 'Dedicated demo store profile not found or not initialized.',
+        });
       }
 
       const token = generateToken();
@@ -2047,10 +2064,41 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    // Frontend static assets are isolated in dist/public (separate from backend bundles and maps)
+    const publicDistPath = fs.existsSync(path.join(process.cwd(), 'dist', 'public'))
+      ? path.join(process.cwd(), 'dist', 'public')
+      : path.join(__dirname, '..', 'public');
+
+    // Security barrier: block any requests trying to access backend bundles, server source maps, or server files
+    app.use((req, res, next) => {
+      const lower = req.path.toLowerCase();
+      if (
+        lower.endsWith('.cjs') ||
+        lower.endsWith('.cjs.map') ||
+        lower.endsWith('.map') ||
+        lower.endsWith('.ts') ||
+        lower.endsWith('.env') ||
+        lower.endsWith('.sql') ||
+        lower.includes('server.cjs') ||
+        lower.includes('server.js')
+      ) {
+        return res.status(404).type('text/plain').send('Not Found');
+      }
+      next();
+    });
+
+    // Serve ONLY browser-intended static files from the isolated public frontend directory
+    app.use(express.static(publicDistPath, {
+      index: false,
+      dotfiles: 'ignore',
+    }));
+
+    // SPA client-side routing fallback (for HTML navigation only)
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (req.path.includes('.') && !req.path.endsWith('.html')) {
+        return res.status(404).type('text/plain').send('Not Found');
+      }
+      res.sendFile(path.join(publicDistPath, 'index.html'));
     });
   }
 

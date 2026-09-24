@@ -209,35 +209,40 @@ async function ensureSubscriptionsAndAdmin(pool: any): Promise<void> {
     }
   }
 
-  // 4. Ensure admin user exists
+  // 4. Ensure admin user exists if configured
   const adminEmail = (process.env.ADMIN_EMAIL || 'admin@sellpilot.ng').toLowerCase().trim();
   const existingAdmin = await pool.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1) OR role = 'admin'", [adminEmail]);
   if (existingAdmin.rows.length === 0) {
-    const adminId = 'usr_admin_sellpilot';
-    const adminPassword = process.env.ADMIN_PASSWORD || 'SellPilotAdmin2026!';
-    const { hash, salt } = hashPassword(adminPassword);
-    
-    const adminBizId = 'biz_admin_sellpilot';
-    await pool.query(
-      `INSERT INTO businesses (id, owner_id, name, category, description, onboarding_completed)
-       VALUES ($1, $2, 'SellPilot Administration', 'other', 'System Admin Operations', TRUE)
-       ON CONFLICT (id) DO UPDATE SET onboarding_completed = TRUE`,
-      [adminBizId, adminId]
-    );
+    const adminPassword = process.env.ADMIN_PASSWORD?.trim();
+    if (!adminPassword) {
+      console.log('Skipping initial admin account creation: ADMIN_PASSWORD environment variable is not configured.');
+    } else {
+      const adminId = 'usr_admin_sellpilot';
+      const { hash, salt } = hashPassword(adminPassword);
+      
+      const adminBizId = 'biz_admin_sellpilot';
+      await pool.query(
+        `INSERT INTO businesses (id, owner_id, name, category, description, onboarding_completed)
+         VALUES ($1, $2, 'SellPilot Administration', 'other', 'System Admin Operations', TRUE)
+         ON CONFLICT (id) DO UPDATE SET onboarding_completed = TRUE`,
+        [adminBizId, adminId]
+      );
 
-    await pool.query(
-      `INSERT INTO users (id, name, email, business_id, role, password_hash, password_salt)
-       VALUES ($1, 'SellPilot Admin', $2, $3, 'admin', $4, $5)
-       ON CONFLICT (id) DO UPDATE SET role = 'admin'`,
-      [adminId, adminEmail, adminBizId, hash, salt]
-    );
+      await pool.query(
+        `INSERT INTO users (id, name, email, business_id, role, password_hash, password_salt)
+         VALUES ($1, 'SellPilot Admin', $2, $3, 'admin', $4, $5)
+         ON CONFLICT (id) DO UPDATE SET role = 'admin'`,
+        [adminId, adminEmail, adminBizId, hash, salt]
+      );
 
-    await pool.query(
-      `INSERT INTO subscriptions (id, business_id, plan, status, current_period_start, current_period_end)
-       VALUES ($1, $2, 'BUSINESS', 'active', NOW(), NOW() + INTERVAL '10 years')
-       ON CONFLICT (business_id) DO NOTHING`,
-      [`sub_${adminBizId}`, adminBizId]
-    );
+      await pool.query(
+        `INSERT INTO subscriptions (id, business_id, plan, status, current_period_start, current_period_end)
+         VALUES ($1, $2, 'BUSINESS', 'active', NOW(), NOW() + INTERVAL '10 years')
+         ON CONFLICT (business_id) DO NOTHING`,
+        [`sub_${adminBizId}`, adminBizId]
+      );
+      console.log(`Initial administrator user provisioned successfully for ${adminEmail}.`);
+    }
   }
 }
 
