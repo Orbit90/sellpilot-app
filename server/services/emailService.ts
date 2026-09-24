@@ -1,20 +1,27 @@
 /**
  * SellPilot Production Transactional Email Service
  *
- * Supported Providers:
- * 1. Resend API (Preferred for modern serverless / Render apps via RESEND_API_KEY)
- * 2. SMTP Provider via Nodemailer (SendGrid, Postmark, AWS SES, Brevo, or custom SMTP)
- * 3. Safe Development / Testing Fallback (when no external credentials are configured)
+ * Email Delivery Provider:
+ * - Exclusively Gmail SMTP via Nodemailer
+ * - Strict SSL/TLS configuration (Default: smtp.gmail.com:465)
+ * - Required Environment Variables:
+ *   - GMAIL_SMTP_HOST
+ *   - GMAIL_SMTP_PORT
+ *   - GMAIL_SMTP_SECURE
+ *   - GMAIL_SMTP_USER
+ *   - GMAIL_SMTP_PASS (Google App Password)
+ *   - GMAIL_FROM_EMAIL
  *
  * Security:
- * - Tokens are generated using crypto.randomBytes(32)
+ * - Tokens are cryptographically random (crypto.randomBytes(32))
  * - Only SHA-256 hashes are persisted in the database
- * - Raw tokens are NEVER exposed in production logs
- * - Strict rate limiting on email resend requests
+ * - Raw tokens and passwords are NEVER exposed in logs
+ * - GMAIL_SMTP_PASS is kept strictly server-side
+ * - NO mock or simulation fallbacks in production: returns clear configuration error if unconfigured
  */
 
 import crypto from 'crypto';
-import nodemailer from 'nodemailer';
+import nodemailer, { type Transporter } from 'nodemailer';
 
 // --- CONFIGURATION ---
 const TOKEN_EXPIRY_HOURS = 24;
@@ -44,16 +51,28 @@ export function hashVerificationToken(rawToken: string): string {
 
 /**
  * Resolves the public application URL for email links.
- * Priority: APP_URL env > reqOrigin > fallback
+ * Strictly guarantees neither localhost nor sellpilot.com is used.
  */
 export function getAppBaseUrl(reqOrigin?: string): string {
-  if (process.env.APP_URL) {
-    return process.env.APP_URL.replace(/\/+$/, '');
+  // 1. Priority: APP_URL environment variable
+  let envUrl = process.env.APP_URL?.trim();
+  if (envUrl) {
+    envUrl = envUrl.replace(/\/+$/, '');
+    if (!envUrl.includes('localhost') && !envUrl.includes('127.0.0.1') && !envUrl.includes('sellpilot.com')) {
+      return envUrl;
+    }
   }
-  if (reqOrigin && !reqOrigin.includes('localhost:3000')) {
-    return reqOrigin.replace(/\/+$/, '');
+
+  // 2. Origin header from incoming request (if from a non-localhost, valid domain)
+  if (reqOrigin) {
+    const origin = reqOrigin.trim().replace(/\/+$/, '');
+    if (!origin.includes('localhost') && !origin.includes('127.0.0.1') && !origin.includes('sellpilot.com')) {
+      return origin;
+    }
   }
-  return 'http://localhost:3000';
+
+  // 3. Fallback: must NEVER be localhost or sellpilot.com
+  return 'https://sellpilot.ng';
 }
 
 // --- RATE LIMITING ---
@@ -63,20 +82,21 @@ interface RateLimitRecord {
   firstRequestInHour: number;
 }
 
-const resendRateLimitMap = new Map<string, RateLimitRecord>();
+const emailResendRateLimitMap = new Map<string, RateLimitRecord>();
 
 /**
- * Checks whether an email or IP can request a verification email.
+ * Checks whether an email or IP can request a verification email re-send.
  * Limits:
  * - Minimum 60 seconds between resends
  * - Maximum 5 resends per hour
  */
 export function checkEmailResendRateLimit(key: string): { allowed: boolean; retryAfterSeconds: number; reason?: string } {
   const now = Date.now();
-  const record = resendRateLimitMap.get(key.toLowerCase().trim());
+  const normalizedKey = key.toLowerCase().trim();
+  const record = emailResendRateLimitMap.get(normalizedKey);
 
   if (!record) {
-    resendRateLimitMap.set(key.toLowerCase().trim(), {
+    emailResendRateLimitMap.set(normalizedKey, {
       lastRequestedAt: now,
       requestCountLastHour: 1,
       firstRequestInHour: now,
@@ -97,7 +117,6 @@ export function checkEmailResendRateLimit(key: string): { allowed: boolean; retr
   // 2. Hourly burst limit check
   const oneHour = 60 * 60 * 1000;
   if (now - record.firstRequestInHour > oneHour) {
-    // Reset hourly window
     record.firstRequestInHour = now;
     record.requestCountLastHour = 1;
     record.lastRequestedAt = now;
@@ -118,6 +137,105 @@ export function checkEmailResendRateLimit(key: string): { allowed: boolean; retr
   return { allowed: true, retryAfterSeconds: 0 };
 }
 
+// --- GMAIL SMTP CONFIGURATION & DIAGNOSTICS ---
+
+export interface GmailSmtpStatus {
+  configured: boolean;
+  missing: string[];
+  host: string;
+  port: number;
+  secure: boolean;
+  userConfigured: boolean;
+  passConfigured: boolean;
+  fromEmail?: string;
+}
+
+/**
+ * Returns configuration diagnostics for Gmail SMTP.
+ * Never leaks the App Password.
+ */
+export function getGmailSmtpStatus(): GmailSmtpStatus {
+  const host = process.env.GMAIL_SMTP_HOST?.trim() || 'smtp.gmail.com';
+  const port = parseInt(process.env.GMAIL_SMTP_PORT?.trim() || '465', 10);
+  const secure = process.env.GMAIL_SMTP_SECURE ? process.env.GMAIL_SMTP_SECURE.trim() === 'true' : port === 465;
+  const user = process.env.GMAIL_SMTP_USER?.trim();
+  const pass = process.env.GMAIL_SMTP_PASS?.trim();
+  const fromEmail = process.env.GMAIL_FROM_EMAIL?.trim();
+
+  const missing: string[] = [];
+  if (!user) missing.push('GMAIL_SMTP_USER');
+  if (!pass) missing.push('GMAIL_SMTP_PASS');
+
+  return {
+    configured: missing.length === 0,
+    missing,
+    host,
+    port,
+    secure,
+    userConfigured: !!user,
+    passConfigured: !!pass,
+    fromEmail: fromEmail || user,
+  };
+}
+
+/**
+ * Resolves the sender email address from GMAIL_FROM_EMAIL or GMAIL_SMTP_USER.
+ */
+function getSenderAddress(): string {
+  const customFrom = process.env.GMAIL_FROM_EMAIL?.trim();
+  const smtpUser = process.env.GMAIL_SMTP_USER?.trim();
+
+  if (customFrom) {
+    if (customFrom.includes('<') && customFrom.includes('>')) {
+      return customFrom;
+    }
+    return `SellPilot <${customFrom}>`;
+  }
+
+  if (smtpUser) {
+    return `SellPilot <${smtpUser}>`;
+  }
+
+  return 'SellPilot <no-reply@sellpilot.ng>';
+}
+
+/**
+ * Creates a secure Nodemailer transporter configured strictly for Gmail SMTP.
+ * Enforces TLS 1.2+ minimum.
+ * Returns null if required credentials (GMAIL_SMTP_USER, GMAIL_SMTP_PASS) are missing.
+ */
+function createGmailTransporter(): { transporter: Transporter | null; missing: string[] } {
+  const host = process.env.GMAIL_SMTP_HOST?.trim() || 'smtp.gmail.com';
+  const port = parseInt(process.env.GMAIL_SMTP_PORT?.trim() || '465', 10);
+  const secure = process.env.GMAIL_SMTP_SECURE ? process.env.GMAIL_SMTP_SECURE.trim() === 'true' : port === 465;
+  const user = process.env.GMAIL_SMTP_USER?.trim();
+  const pass = process.env.GMAIL_SMTP_PASS?.trim();
+
+  const missing: string[] = [];
+  if (!user) missing.push('GMAIL_SMTP_USER');
+  if (!pass) missing.push('GMAIL_SMTP_PASS');
+
+  if (missing.length > 0) {
+    return { transporter: null, missing };
+  }
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: {
+      user,
+      pass,
+    },
+    tls: {
+      rejectUnauthorized: true,
+      minVersion: 'TLSv1.2',
+    },
+  });
+
+  return { transporter, missing: [] };
+}
+
 // --- EMAIL DISPATCH ---
 
 export interface SendVerificationEmailParams {
@@ -127,9 +245,16 @@ export interface SendVerificationEmailParams {
   reqOrigin?: string;
 }
 
+export interface SendPasswordResetEmailParams {
+  toEmail: string;
+  userName: string;
+  resetToken: string;
+  reqOrigin?: string;
+}
+
 export interface EmailDispatchResult {
   success: boolean;
-  provider: 'resend' | 'smtp' | 'simulated';
+  provider: 'gmail_smtp';
   messageId?: string;
   error?: string;
 }
@@ -229,8 +354,8 @@ SellPilot — Social Commerce Automation for Nigerian Merchants
 }
 
 /**
- * Sends a verification email using the configured email provider.
- * Supports: Resend API > SMTP > Simulated (development)
+ * Sends a verification email via Gmail SMTP.
+ * Returns a clear error if Gmail SMTP is not configured (no simulation in production).
  */
 export async function sendVerificationEmail(params: SendVerificationEmailParams): Promise<EmailDispatchResult> {
   const { toEmail, userName, rawToken, reqOrigin } = params;
@@ -239,106 +364,132 @@ export async function sendVerificationEmail(params: SendVerificationEmailParams)
   const subject = 'Verify your SellPilot account';
   const html = buildVerificationEmailHtml(userName, verificationUrl);
   const text = buildVerificationEmailText(userName, verificationUrl);
+  const from = getSenderAddress();
 
-  // 1. OPTION A: RESEND REST API
-  if (process.env.RESEND_API_KEY) {
-    try {
-      const fromEmail = process.env.RESEND_FROM_EMAIL || 'SellPilot <onboarding@resend.dev>';
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: fromEmail,
-          to: [toEmail],
-          subject,
-          html,
-          text,
-        }),
-      });
+  const { transporter, missing } = createGmailTransporter();
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        console.error('[EmailService] Resend API error:', res.status, errorData);
-        return {
-          success: false,
-          provider: 'resend',
-          error: errorData.message || `Resend API failed with status ${res.status}`,
-        };
-      }
-
-      const data: any = await res.json();
-      console.log(`[EmailService] Verification email sent to ${toEmail} via Resend. Message ID: ${data?.id}`);
-      return {
-        success: true,
-        provider: 'resend',
-        messageId: data?.id,
-      };
-    } catch (err: any) {
-      console.error('[EmailService] Failed to send via Resend:', err?.message || err);
-      return {
-        success: false,
-        provider: 'resend',
-        error: err?.message || 'Failed to dispatch email via Resend',
-      };
-    }
+  // If Gmail SMTP credentials are not configured, reject with clear configuration error
+  if (!transporter) {
+    const errorMsg = `[EmailService] Gmail SMTP is not configured (missing environment variables: ${missing.join(', ')}). Verification email was not sent to ${toEmail}.`;
+    console.error(errorMsg);
+    return {
+      success: false,
+      provider: 'gmail_smtp',
+      error: `Gmail SMTP configuration missing: ${missing.join(', ')}`,
+    };
   }
 
-  // 2. OPTION B: SMTP (Nodemailer)
-  if (process.env.SMTP_HOST) {
-    try {
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: Number(process.env.SMTP_PORT) || 587,
-        secure: process.env.SMTP_SECURE === 'true',
-        auth: {
-          user: process.env.SMTP_USER || '',
-          pass: process.env.SMTP_PASS || '',
-        },
-      });
+  try {
+    const info = await transporter.sendMail({
+      from,
+      to: toEmail,
+      subject,
+      html,
+      text,
+    });
 
-      const fromEmail = process.env.SMTP_FROM || 'SellPilot <no-reply@sellpilot.ng>';
-      const info = await transporter.sendMail({
-        from: fromEmail,
-        to: toEmail,
-        subject,
-        html,
-        text,
-      });
+    console.log(`[EmailService] Verification email sent to ${toEmail} via Gmail SMTP. Message ID: ${info.messageId}`);
+    return {
+      success: true,
+      provider: 'gmail_smtp',
+      messageId: info.messageId,
+    };
+  } catch (err: any) {
+    // CRITICAL SECURITY: Never print or leak passwords or SMTP credentials to logs
+    const safeErrMessage = err?.message
+      ? String(err.message).replace(/(pass|auth|key|password)=[^&\s]+/gi, '$1=[REDACTED]')
+      : 'SMTP error';
+    console.error('[EmailService] Failed to send email via Gmail SMTP:', safeErrMessage);
+    return {
+      success: false,
+      provider: 'gmail_smtp',
+      error: `Failed to dispatch email via Gmail SMTP: ${safeErrMessage}`,
+    };
+  }
+}
 
-      console.log(`[EmailService] Verification email sent to ${toEmail} via SMTP. Message ID: ${info.messageId}`);
-      return {
-        success: true,
-        provider: 'smtp',
-        messageId: info.messageId,
-      };
-    } catch (err: any) {
-      console.error('[EmailService] Failed to send via SMTP:', err?.message || err);
-      return {
-        success: false,
-        provider: 'smtp',
-        error: err?.message || 'Failed to dispatch email via SMTP',
-      };
-    }
+/**
+ * Sends a password reset email using Gmail SMTP.
+ * Returns a clear error if Gmail SMTP is not configured.
+ */
+export async function sendPasswordResetEmail(params: SendPasswordResetEmailParams): Promise<EmailDispatchResult> {
+  const { toEmail, userName, resetToken, reqOrigin } = params;
+  const baseUrl = getAppBaseUrl(reqOrigin);
+  const resetUrl = `${baseUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
+  const subject = 'Reset your SellPilot password';
+  const safeName = userName ? userName.replace(/</g, '&lt;').replace(/>/g, '&gt;') : 'Merchant';
+
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Reset your SellPilot password</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #0b1120; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f8fafc; }
+    .container { max-width: 580px; margin: 0 auto; padding: 40px 20px; }
+    .card { background: #0f172a; border: 1px solid #334155; border-radius: 16px; padding: 40px 32px; }
+    .btn { display: inline-block; background: #0d9488; color: #ffffff !important; text-decoration: none; font-weight: 700; padding: 14px 28px; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h2>Reset Password Request</h2>
+      <p>Hello <strong>${safeName}</strong>,</p>
+      <p>We received a request to reset your password for your SellPilot merchant account.</p>
+      <p><a href="${resetUrl}" class="btn">Reset My Password →</a></p>
+      <p style="font-size: 13px; color: #94a3b8;">This link will expire in 1 hour. If you didn't request this, you can safely ignore this email.</p>
+    </div>
+  </div>
+</body>
+</html>
+  `.trim();
+
+  const text = `
+Hello ${userName || 'Merchant'},
+
+We received a request to reset your password for your SellPilot account:
+${resetUrl}
+
+This link is valid for 1 hour. If you didn't request this, please ignore this email.
+  `.trim();
+
+  const from = getSenderAddress();
+  const { transporter, missing } = createGmailTransporter();
+
+  if (!transporter) {
+    const errorMsg = `[EmailService] Gmail SMTP is not configured (missing environment variables: ${missing.join(', ')}). Password reset email was not sent to ${toEmail}.`;
+    console.error(errorMsg);
+    return {
+      success: false,
+      provider: 'gmail_smtp',
+      error: `Gmail SMTP configuration missing: ${missing.join(', ')}`,
+    };
   }
 
-  // 3. OPTION C: SIMULATED (Development / CI / Prototyping)
-  // When no production provider credentials are set, simulate cleanly.
-  // In development, log the URL safely so developer can test.
-  // In production, do not log raw token.
-  const isProduction = process.env.NODE_ENV === 'production';
-  if (!isProduction) {
-    console.log(`[EmailService] [DEV SIMULATION] Verification email dispatched to: ${toEmail}`);
-    console.log(`[EmailService] [DEV SIMULATION] Action URL: ${verificationUrl}`);
-  } else {
-    console.warn(`[EmailService] No email provider configured (RESEND_API_KEY or SMTP_HOST missing). Verification email simulation recorded for ${toEmail}.`);
+  try {
+    const info = await transporter.sendMail({
+      from,
+      to: toEmail,
+      subject,
+      html,
+      text,
+    });
+    return {
+      success: true,
+      provider: 'gmail_smtp',
+      messageId: info.messageId,
+    };
+  } catch (err: any) {
+    const safeErrMessage = err?.message
+      ? String(err.message).replace(/(pass|auth|key|password)=[^&\s]+/gi, '$1=[REDACTED]')
+      : 'SMTP error';
+    console.error('[EmailService] Failed to send password reset via Gmail SMTP:', safeErrMessage);
+    return {
+      success: false,
+      provider: 'gmail_smtp',
+      error: `Failed to dispatch password reset via Gmail SMTP: ${safeErrMessage}`,
+    };
   }
-
-  return {
-    success: true,
-    provider: 'simulated',
-    messageId: `sim_${Date.now()}`,
-  };
 }

@@ -32,6 +32,7 @@ import {
   hashVerificationToken,
   sendVerificationEmail,
   checkEmailResendRateLimit,
+  getGmailSmtpStatus,
 } from './server/services/emailService';
 
 declare global {
@@ -2055,6 +2056,12 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`SellPilot server listening on port ${PORT}`);
+    const smtpStatus = getGmailSmtpStatus();
+    if (smtpStatus.configured) {
+      console.log(`[EmailService] Gmail SMTP configured successfully: Host=${smtpStatus.host}, Port=${smtpStatus.port}, Secure=${smtpStatus.secure}, From=${smtpStatus.fromEmail}`);
+    } else {
+      console.warn(`[EmailService] Gmail SMTP incomplete: Missing required variables [${smtpStatus.missing.join(', ')}]. Email verification requires GMAIL_SMTP_USER and GMAIL_SMTP_PASS.`);
+    }
   });
 }
 

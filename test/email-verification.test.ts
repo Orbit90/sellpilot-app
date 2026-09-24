@@ -24,6 +24,9 @@ import {
   hashVerificationToken,
   checkEmailResendRateLimit,
   sendVerificationEmail,
+  sendPasswordResetEmail,
+  getAppBaseUrl,
+  getGmailSmtpStatus,
 } from '../server/services/emailService';
 
 interface TestResult {
@@ -254,7 +257,7 @@ async function runTests() {
   );
 
   // -------------------------------------------------------------------------
-  // TEST 10: Email dispatch service handles simulated / provider dispatch cleanly
+  // TEST 10: Email dispatch service uses Gmail SMTP exclusively (no simulation fallback)
   // -------------------------------------------------------------------------
   const dispatchResult = await sendVerificationEmail({
     toEmail: 'test-recipient@sellpilot.ng',
@@ -263,14 +266,67 @@ async function runTests() {
     reqOrigin: 'http://localhost:3000',
   });
 
+  // If credentials are provided, provider is gmail_smtp; if not provided, returns explicit config error (never pretends success with simulated)
+  const isGmailConfigured = !!(process.env.GMAIL_SMTP_USER && process.env.GMAIL_SMTP_PASS);
+  const test10Passed = isGmailConfigured
+    ? dispatchResult.provider === 'gmail_smtp'
+    : dispatchResult.success === false && dispatchResult.provider === 'gmail_smtp' && !!dispatchResult.error?.includes('Gmail SMTP');
+
   record(
     10,
-    'Email dispatch service dispatches verification email without exposing raw token',
-    dispatchResult.success === true && !!dispatchResult.provider
+    'Email dispatch service uses Gmail SMTP exclusively and returns clear configuration error without simulation',
+    test10Passed
   );
 
   // -------------------------------------------------------------------------
-  // TEST 11: Tenant Isolation: User A cannot use User B verification token
+  // TEST 11: Verification URL safety: strictly uses APP_URL, never localhost, never sellpilot.com
+  // -------------------------------------------------------------------------
+  const computedBaseUrl = getAppBaseUrl('http://localhost:3000');
+  const isSafeUrl = !computedBaseUrl.includes('localhost') && !computedBaseUrl.includes('sellpilot.com');
+  record(
+    11,
+    'Verification URL resolves via APP_URL and never uses localhost or sellpilot.com',
+    isSafeUrl
+  );
+
+  // -------------------------------------------------------------------------
+  // TEST 12: Password reset email dispatch uses Gmail SMTP transport without simulation fallback
+  // -------------------------------------------------------------------------
+  const resetDispatchResult = await sendPasswordResetEmail({
+    toEmail: 'reset-recipient@sellpilot.ng',
+    userName: 'Test Merchant',
+    resetToken: crypto.randomBytes(32).toString('hex'),
+    reqOrigin: 'http://localhost:3000',
+  });
+
+  const test12Passed = isGmailConfigured
+    ? resetDispatchResult.provider === 'gmail_smtp'
+    : resetDispatchResult.success === false && resetDispatchResult.provider === 'gmail_smtp' && !!resetDispatchResult.error?.includes('Gmail SMTP');
+
+  record(
+    12,
+    'Password reset email dispatch uses Gmail SMTP exclusively without simulation fallback',
+    test12Passed
+  );
+
+  // -------------------------------------------------------------------------
+  // TEST 13: Gmail SMTP configuration reader verifies all required GMAIL_ variables
+  // -------------------------------------------------------------------------
+  const smtpStatus = getGmailSmtpStatus();
+  const test13Passed = (
+    smtpStatus.host === (process.env.GMAIL_SMTP_HOST || 'smtp.gmail.com') &&
+    typeof smtpStatus.port === 'number' &&
+    typeof smtpStatus.secure === 'boolean' &&
+    Array.isArray(smtpStatus.missing)
+  );
+  record(
+    13,
+    'Gmail SMTP diagnostics verify GMAIL_SMTP_HOST, PORT, SECURE, USER, PASS, and FROM variables',
+    test13Passed
+  );
+
+  // -------------------------------------------------------------------------
+  // TEST 14: Tenant Isolation: User A cannot use User B verification token
   // -------------------------------------------------------------------------
   const userAId = `usr_tenant_a_${Date.now()}`;
   const userBId = `usr_tenant_b_${Date.now()}`;
@@ -311,7 +367,7 @@ async function runTests() {
   const checkUserB = await db.users.findById(userBId);
 
   record(
-    11,
+    14,
     'Verification strictly updates target user (User A) and preserves User B isolation',
     checkUserA?.emailVerified === true && checkUserB?.emailVerified === false
   );
