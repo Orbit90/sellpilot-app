@@ -50,9 +50,11 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   if (!res.ok) {
     let errorMsg = 'Request failed';
+    let errorCode: string | undefined;
     try {
       const data = await res.json();
       errorMsg = data.error || errorMsg;
+      errorCode = data.code;
     } catch {
       // ignore
     }
@@ -63,8 +65,15 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       );
     }
 
-    const err = new Error(errorMsg) as Error & { status?: number };
+    if (res.status === 403 && (errorCode === 'EMAIL_VERIFICATION_REQUIRED' || errorMsg.includes('verify your email')) && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('sellpilot:email_verification_required', { detail: { message: errorMsg } })
+      );
+    }
+
+    const err = new Error(errorMsg) as Error & { status?: number; code?: string };
     err.status = res.status;
+    err.code = errorCode;
     throw err;
   }
 
@@ -101,6 +110,12 @@ export const api = {
     request<{ success: boolean; message: string }>('/api/auth/reset-password', {
       method: 'POST',
       body: JSON.stringify({ email }),
+    }),
+
+  confirmResetPassword: (token: string, password: string) =>
+    request<{ success: boolean; message: string }>('/api/auth/confirm-reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
     }),
 
   verifyEmail: (token: string) =>

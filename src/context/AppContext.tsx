@@ -224,7 +224,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     initAuth();
-  }, [refreshData]);
+
+    const handleEmailVerificationRequired = (e: any) => {
+      const msg = e?.detail?.message || 'Please verify your email address before continuing.';
+      showToast(msg, 'error');
+    };
+    window.addEventListener('sellpilot:email_verification_required', handleEmailVerificationRequired);
+
+    return () => {
+      window.removeEventListener('sellpilot:email_verification_required', handleEmailVerificationRequired);
+    };
+  }, [refreshData, showToast]);
 
   const login = async (email: string, password?: string) => {
     try {

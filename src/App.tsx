@@ -19,19 +19,32 @@ import { UpgradeModal } from './components/subscription/UpgradeModal';
 import { PaymentCallbackView } from './components/views/PaymentCallbackView';
 import { EmailVerificationBanner } from './components/EmailVerificationBanner';
 import { EmailVerificationView } from './components/views/EmailVerificationView';
+import { ResetPasswordView } from './components/views/ResetPasswordView';
 
 const MainContent: React.FC = () => {
   const { activeSection, setActiveSection, isLoggedIn, isOnboarding, isInitialized, user } = useApp();
   const [isCallbackDismissed, setIsCallbackDismissed] = useState(false);
   const [isVerificationDismissed, setIsVerificationDismissed] = useState(false);
+  const [isResetPasswordDismissed, setIsResetPasswordDismissed] = useState(false);
+
+  // Check if current URL is password reset link
+  const isResetPassword =
+    !isResetPasswordDismissed &&
+    typeof window !== 'undefined' &&
+    (window.location.pathname.startsWith('/reset-password') ||
+      window.location.search.includes('reset_token=') ||
+      (window.location.search.includes('token=') &&
+        (window.location.pathname.includes('reset') || window.location.search.includes('action=reset'))));
 
   // Check if current URL is email verification link
   const isEmailVerification =
     !isVerificationDismissed &&
+    !isResetPassword &&
     typeof window !== 'undefined' &&
     (window.location.pathname.startsWith('/verify-email') ||
       window.location.search.includes('verify_token=') ||
       (window.location.search.includes('token=') &&
+        !window.location.pathname.startsWith('/reset-password') &&
         !window.location.search.includes('trxref=') &&
         !window.location.search.includes('reference=')));
 
@@ -54,6 +67,28 @@ const MainContent: React.FC = () => {
           </div>
           <p className="text-xs font-semibold text-slate-400">Loading SellPilot...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Handle Password Reset view (accessible even when unauthenticated)
+  if (isResetPassword) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased">
+        <ResetPasswordView
+          onDismiss={() => {
+            try {
+              window.history.replaceState({}, document.title, '/');
+            } catch {
+              // ignore
+            }
+            setIsResetPasswordDismissed(true);
+            if (isLoggedIn) {
+              setActiveSection('dashboard');
+            }
+          }}
+        />
+        <ToastContainer />
       </div>
     );
   }

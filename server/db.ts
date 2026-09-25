@@ -12,6 +12,7 @@ import {
   usageRepo,
   paymentsRepo,
   verificationTokensRepo,
+  passwordResetTokensRepo,
   resetDemoData,
 } from './db/repositories';
 import { runMigrations, createRelationalSnapshot } from './db/migrate';
@@ -87,6 +88,7 @@ export const db = {
   usage: usageRepo,
   payments: paymentsRepo,
   verificationTokens: verificationTokensRepo,
+  passwordResetTokens: passwordResetTokensRepo,
 
   // Legacy state accessor for quick demo bootstrap
   getState: () => {

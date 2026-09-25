@@ -218,6 +218,68 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
+ * Strict server-authoritative middleware that requires an authenticated user's email to be verified.
+ * Guarantees:
+ * 1. An authenticated session exists (via req.user or resolving Authorization Bearer token).
+ * 2. Re-queries PostgreSQL directly for the authoritative email_verified flag (never trusts frontend client state).
+ * 3. Rejects unverified accounts with HTTP 403 Forbidden and a clear, safe security message.
+ * 4. Allows verified users to continue cleanly.
+ */
+export async function requireEmailVerified(req: Request, res: Response, next: NextFunction) {
+  try {
+    // 1. Ensure authenticated session
+    if (!req.user || !req.user.id) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+      }
+      const token = authHeader.substring(7).trim();
+      if (!token) {
+        return res.status(401).json({ error: 'Valid session token required.' });
+      }
+      const session = await db.sessions.findByToken(token);
+      if (!session) {
+        return res.status(401).json({ error: 'Session expired or invalid. Please sign in again.' });
+      }
+      const user = await db.users.findById(session.userId);
+      if (!user) {
+        return res.status(401).json({ error: 'User account not found.' });
+      }
+      const business = await db.businesses.findById(session.businessId);
+      if (!business) {
+        return res.status(401).json({ error: 'Business account not found.' });
+      }
+      req.user = user;
+      (req as any).business = business;
+      (req as any).businessId = business.id;
+      (req as any).token = token;
+    }
+
+    // 2. Query database directly for authoritative email verification status (never trust stale or client boolean)
+    const freshUser = await db.users.findById(req.user.id);
+    if (!freshUser) {
+      return res.status(401).json({ error: 'User account not found.' });
+    }
+    req.user = freshUser;
+
+    // 3. Reject unverified accounts
+    if (freshUser.emailVerified === false) {
+      return res.status(403).json({
+        status: false,
+        error: 'Please verify your email address before continuing.',
+        code: 'EMAIL_VERIFICATION_REQUIRED',
+        emailVerified: false,
+      });
+    }
+
+    next();
+  } catch (err: any) {
+    console.error('Email verification guard error:', err);
+    res.status(500).json({ error: 'Verification check temporarily unavailable.' });
+  }
+}
+
+/**
  * Records usage event atomically in the current billing period.
  */
 export async function recordMetricUsage(

@@ -97,6 +97,26 @@ export async function runMigrations(): Promise<void> {
   // Ensure email verification schema & migration for existing users
   await ensureEmailVerificationSchema(pool);
   console.log('Email verification architecture synchronized.');
+
+  // Ensure password reset schema
+  await ensurePasswordResetSchema(pool);
+  console.log('Password reset architecture synchronized.');
+}
+
+async function ensurePasswordResetSchema(pool: any): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_prt_user_id ON password_reset_tokens(user_id);
+  `);
 }
 
 async function ensureEmailVerificationSchema(pool: any): Promise<void> {
@@ -807,6 +827,12 @@ export async function createRelationalSnapshot(): Promise<void> {
     const settings = (await query('SELECT * FROM business_settings')).rows;
     const sessions = (await query('SELECT * FROM sessions')).rows;
     const conversationAnalyses = (await query('SELECT * FROM conversation_analyses')).rows;
+    let passwordResetTokens: any[] = [];
+    try {
+      passwordResetTokens = (await query('SELECT * FROM password_reset_tokens')).rows;
+    } catch {
+      // Non-fatal if table not created yet
+    }
 
     const backup = {
       users,
@@ -820,6 +846,7 @@ export async function createRelationalSnapshot(): Promise<void> {
       settings,
       sessions,
       conversationAnalyses,
+      passwordResetTokens,
       exportedAt: new Date().toISOString(),
     };
 

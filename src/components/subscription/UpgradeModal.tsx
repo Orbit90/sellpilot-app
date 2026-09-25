@@ -94,7 +94,7 @@ export const UpgradeModal: React.FC = () => {
     }
 
     if (user?.emailVerified === false) {
-      showToast('Please verify your email address before activating or upgrading a subscription.', 'error');
+      showToast('Please verify your email address before continuing.', 'error');
       return;
     }
 

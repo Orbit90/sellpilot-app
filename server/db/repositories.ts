@@ -2321,3 +2321,91 @@ export const verificationTokensRepo = {
     };
   },
 };
+
+// ==========================================
+// 13. PASSWORD RESET TOKENS REPOSITORY
+// ==========================================
+export interface PasswordResetTokenRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: string;
+  usedAt: string | null;
+  createdAt: string;
+}
+
+export const passwordResetTokensRepo = {
+  async create(token: { id: string; userId: string; tokenHash: string; expiresAt: Date }): Promise<PasswordResetTokenRecord> {
+    await query(
+      `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, NOW())`,
+      [token.id, token.userId, token.tokenHash, token.expiresAt.toISOString()]
+    );
+    return {
+      id: token.id,
+      userId: token.userId,
+      tokenHash: token.tokenHash,
+      expiresAt: token.expiresAt.toISOString(),
+      usedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+  },
+
+  async findByHash(tokenHash: string): Promise<PasswordResetTokenRecord | null> {
+    const res = await query(
+      `SELECT * FROM password_reset_tokens WHERE token_hash = $1`,
+      [tokenHash]
+    );
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      userId: r.user_id,
+      tokenHash: r.token_hash,
+      expiresAt: new Date(r.expires_at).toISOString(),
+      usedAt: r.used_at ? new Date(r.used_at).toISOString() : null,
+      createdAt: new Date(r.created_at).toISOString(),
+    };
+  },
+
+  async markUsed(id: string): Promise<void> {
+    await query(
+      `UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1`,
+      [id]
+    );
+  },
+
+  async invalidateAllForUser(userId: string): Promise<void> {
+    await query(
+      `UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`,
+      [userId]
+    );
+  },
+
+  async countRecentRequests(userId: string, minutes: number = 60): Promise<number> {
+    const res = await query(
+      `SELECT COUNT(*) as count FROM password_reset_tokens
+       WHERE user_id = $1 AND created_at > NOW() - ($2 || ' minutes')::INTERVAL`,
+      [userId, minutes.toString()]
+    );
+    return parseInt(res.rows[0]?.count || '0', 10);
+  },
+
+  async getLatestForUser(userId: string): Promise<PasswordResetTokenRecord | null> {
+    const res = await query(
+      `SELECT * FROM password_reset_tokens WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [userId]
+    );
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      userId: r.user_id,
+      tokenHash: r.token_hash,
+      expiresAt: new Date(r.expires_at).toISOString(),
+      usedAt: r.used_at ? new Date(r.used_at).toISOString() : null,
+      createdAt: new Date(r.created_at).toISOString(),
+    };
+  },
+};
+

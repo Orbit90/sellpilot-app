@@ -25,6 +25,7 @@ import nodemailer, { type Transporter } from 'nodemailer';
 
 // --- CONFIGURATION ---
 const TOKEN_EXPIRY_HOURS = 24;
+const PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 60;
 
 export interface TokenGenerationResult {
   rawToken: string;
@@ -33,7 +34,7 @@ export interface TokenGenerationResult {
 }
 
 /**
- * Generates a cryptographically secure random token and its SHA-256 hash.
+ * Generates a cryptographically secure random token and its SHA-256 hash for email verification.
  */
 export function generateVerificationToken(): TokenGenerationResult {
   const rawToken = crypto.randomBytes(32).toString('hex');
@@ -46,6 +47,24 @@ export function generateVerificationToken(): TokenGenerationResult {
  * Computes the SHA-256 hash of a raw verification token.
  */
 export function hashVerificationToken(rawToken: string): string {
+  return crypto.createHash('sha256').update(rawToken.trim()).digest('hex');
+}
+
+/**
+ * Generates a cryptographically secure random token and its SHA-256 hash for password reset.
+ * Token expires in 60 minutes.
+ */
+export function generatePasswordResetToken(): TokenGenerationResult {
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashPasswordResetToken(rawToken);
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TOKEN_EXPIRY_MINUTES * 60 * 1000);
+  return { rawToken, tokenHash, expiresAt };
+}
+
+/**
+ * Computes the SHA-256 hash of a raw password reset token.
+ */
+export function hashPasswordResetToken(rawToken: string): string {
   return crypto.createHash('sha256').update(rawToken.trim()).digest('hex');
 }
 
@@ -129,6 +148,61 @@ export function checkEmailResendRateLimit(key: string): { allowed: boolean; retr
       allowed: false,
       retryAfterSeconds: Math.max(1, retryAfter),
       reason: 'Too many verification requests. Please try again in an hour.',
+    };
+  }
+
+  record.lastRequestedAt = now;
+  record.requestCountLastHour += 1;
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+const passwordResetRateLimitMap = new Map<string, RateLimitRecord>();
+
+/**
+ * Checks whether an email or IP can request a password reset email.
+ * Limits:
+ * - Minimum 30 seconds cooldown between reset requests for the same target
+ * - Maximum 5 requests per hour
+ */
+export function checkPasswordResetRateLimit(key: string): { allowed: boolean; retryAfterSeconds: number; reason?: string } {
+  const now = Date.now();
+  const normalizedKey = key.toLowerCase().trim();
+  const record = passwordResetRateLimitMap.get(normalizedKey);
+
+  if (!record) {
+    passwordResetRateLimitMap.set(normalizedKey, {
+      lastRequestedAt: now,
+      requestCountLastHour: 1,
+      firstRequestInHour: now,
+    });
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  // 1. Minimum 30-second cooldown check
+  const secondsSinceLast = Math.floor((now - record.lastRequestedAt) / 1000);
+  if (secondsSinceLast < 30) {
+    return {
+      allowed: false,
+      retryAfterSeconds: 30 - secondsSinceLast,
+      reason: `Please wait ${30 - secondsSinceLast}s before requesting another password reset email.`,
+    };
+  }
+
+  // 2. Hourly burst limit check (max 5 reset requests per hour)
+  const oneHour = 60 * 60 * 1000;
+  if (now - record.firstRequestInHour > oneHour) {
+    record.firstRequestInHour = now;
+    record.requestCountLastHour = 1;
+    record.lastRequestedAt = now;
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  if (record.requestCountLastHour >= 5) {
+    const retryAfter = Math.ceil((record.firstRequestInHour + oneHour - now) / 1000);
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, retryAfter),
+      reason: 'Too many password reset requests. Please try again in an hour.',
     };
   }
 

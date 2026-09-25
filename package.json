@@ -11,6 +11,8 @@
     "lint": "tsc --noEmit",
     "test": "tsx test/email-verification.test.ts",
     "test:verification": "tsx test/email-verification.test.ts",
+    "test:guard": "tsx test/email-verification-guard.test.ts",
+    "test:password-reset": "tsx test/password-reset.test.ts",
     "test:paystack": "tsx test/paystack-security.test.ts",
     "test:demo": "tsx test/demo-auth-security.test.ts",
     "test:admin": "tsx test/admin-auth-security.test.ts",

@@ -328,3 +328,16 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
 CREATE INDEX IF NOT EXISTS idx_evt_token_hash ON email_verification_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_evt_user_id ON email_verification_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users(email_verified);
+
+-- 13. PASSWORD RESET TOKENS
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_prt_user_id ON password_reset_tokens(user_id);

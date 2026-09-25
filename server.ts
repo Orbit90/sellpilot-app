@@ -17,6 +17,7 @@ import {
   checkSubscriptionAccess,
   requireActiveSubscription,
   requireAdmin,
+  requireEmailVerified,
   recordMetricUsage,
   normalizeEmail,
   normalizePhone,
@@ -34,6 +35,10 @@ import {
   sendVerificationEmail,
   checkEmailResendRateLimit,
   getGmailSmtpStatus,
+  generatePasswordResetToken,
+  hashPasswordResetToken,
+  sendPasswordResetEmail,
+  checkPasswordResetRateLimit,
 } from './server/services/emailService';
 
 declare global {
@@ -551,6 +556,154 @@ async function startServer() {
     }
   });
 
+  // --- PASSWORD RESET ENDPOINTS ---
+
+  // POST /api/auth/reset-password
+  // Requests a password reset link. Anti-enumeration guaranteed: identical response whether email exists or not.
+  app.post('/api/auth/reset-password', async (req, res) => {
+    try {
+      const email = (req.body?.email || '').toString().trim().toLowerCase();
+      if (!email) {
+        return res.status(400).json({ error: 'Email address is required.' });
+      }
+
+      // Check rate limit by IP + Email
+      const clientIp = (req.headers['x-forwarded-for'] as string) || req.ip || 'anonymous';
+      const rateKey = `${clientIp}_${email}`;
+      const rateCheck = checkPasswordResetRateLimit(rateKey);
+      if (!rateCheck.allowed) {
+        return res.status(429).json({
+          error: rateCheck.reason || `Please wait ${rateCheck.retryAfterSeconds}s before requesting another password reset email.`,
+          retryAfterSeconds: rateCheck.retryAfterSeconds,
+        });
+      }
+
+      const genericResponse = {
+        success: true,
+        message: 'If an account exists with this email address, password reset instructions have been sent.',
+      };
+
+      const user = await db.users.findByEmail(email);
+
+      // Security requirement: Always return generic response to prevent account enumeration
+      if (!user) {
+        return res.json(genericResponse);
+      }
+
+      // Invalidate previous unused reset tokens for this user
+      await db.passwordResetTokens.invalidateAllForUser(user.id);
+
+      // Generate cryptographically secure random token (32 bytes = 64 hex chars)
+      const { rawToken, tokenHash, expiresAt } = generatePasswordResetToken();
+
+      // Store ONLY the token hash in the database (raw token is never persisted)
+      await db.passwordResetTokens.create({
+        id: `prt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      });
+
+      await db.persist();
+
+      // Dispatch password reset email via existing Gmail SMTP service
+      const origin = (req.headers.origin as string) || (req.headers.host ? `${req.protocol}://${req.headers.host}` : undefined);
+      try {
+        await sendPasswordResetEmail({
+          toEmail: user.email,
+          userName: user.name,
+          resetToken: rawToken,
+          reqOrigin: origin,
+        });
+      } catch (emailErr) {
+        console.error('[Auth] Failed to dispatch password reset email via Gmail SMTP');
+      }
+
+      return res.json(genericResponse);
+    } catch (err: any) {
+      console.error('[Auth] Password reset request error');
+      return res.status(500).json({ error: 'Failed to process password reset request. Please try again.' });
+    }
+  });
+
+  // POST /api/auth/confirm-reset-password
+  // Confirms password reset using single-use hashed token and sets new password
+  app.post('/api/auth/confirm-reset-password', async (req, res) => {
+    try {
+      const { token, password } = req.body || {};
+      if (!token || typeof token !== 'string' || !token.trim()) {
+        return res.status(400).json({ error: 'Password reset token is required.' });
+      }
+
+      if (!password || typeof password !== 'string') {
+        return res.status(400).json({ error: 'New password is required.' });
+      }
+
+      // Enforce the same password policy used by normal registration
+      if (password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+      }
+
+      const tokenHash = hashPasswordResetToken(token.trim());
+      const record = await db.passwordResetTokens.findByHash(tokenHash);
+
+      if (!record) {
+        return res.status(400).json({
+          error: 'Invalid or expired password reset link. Please request a new one.',
+          code: 'TOKEN_INVALID',
+        });
+      }
+
+      if (record.usedAt) {
+        return res.status(400).json({
+          error: 'This password reset link has already been used. Please request a new one.',
+          code: 'TOKEN_ALREADY_USED',
+        });
+      }
+
+      if (new Date(record.expiresAt).getTime() < Date.now()) {
+        return res.status(400).json({
+          error: 'This password reset link has expired (links are valid for 60 minutes). Please request a new one.',
+          code: 'TOKEN_EXPIRED',
+          expired: true,
+        });
+      }
+
+      const user = await db.users.findById(record.userId);
+      if (!user) {
+        return res.status(400).json({ error: 'User account not found.' });
+      }
+
+      // Hash the new password using existing secure scrypt implementation
+      const { hash, salt } = hashPassword(password);
+
+      // Update the user password in database
+      await db.users.update(user.id, {
+        passwordHash: hash,
+        passwordSalt: salt,
+      });
+
+      // Mark the token as used immediately to prevent replay/reuse
+      await db.passwordResetTokens.markUsed(record.id);
+
+      // Invalidate all remaining reset tokens for this user
+      await db.passwordResetTokens.invalidateAllForUser(user.id);
+
+      // Invalidate all existing authenticated sessions for this user
+      await db.sessions.deleteByUserId(user.id);
+
+      await db.persist();
+
+      return res.json({
+        success: true,
+        message: 'Your password has been successfully reset. You can now sign in with your new password.',
+      });
+    } catch (err: any) {
+      console.error('[Auth] Confirm password reset error');
+      return res.status(500).json({ error: 'Failed to reset password. Please try again.' });
+    }
+  });
+
   // --- COMMERCIAL SUBSCRIPTION & BILLING APIS ---
   app.get('/api/plans', (_req, res) => {
     res.json(Object.values(PLAN_CONFIGS));
@@ -586,14 +739,14 @@ async function startServer() {
   });
 
   // Client attempt to directly alter plan without payment gateway verification is strictly rejected!
-  app.post('/api/subscription/change-plan', requireAuth, (_req, res) => {
+  app.post('/api/subscription/change-plan', requireAuth, requireEmailVerified, (_req, res) => {
     res.status(403).json({
       error: 'Direct client modification of subscription plans is forbidden. Upgrades require verified billing confirmation or administrator activation.',
     });
   });
 
   // Payment checkout initiator (Paystack / Flutterwave abstraction)
-  app.post('/api/subscription/checkout', requireAuth, async (req, res) => {
+  app.post('/api/subscription/checkout', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { planId } = req.body;
       const plan = planId && planId in PLAN_CONFIGS ? PLAN_CONFIGS[planId as SubscriptionPlanId] : null;
@@ -620,7 +773,7 @@ async function startServer() {
   // --- PAYSTACK PAYMENT INITIALIZATION ---
   // POST /api/payments/paystack/initialize
   // Requirements:
-  // 1. Authenticated SellPilot user required
+  // 1. Authenticated SellPilot user with verified email required
   // 2. Accepts only STARTER, PRO, BUSINESS
   // 3. Server strictly calculates price in Kobo (ignoring any client amount)
   // 4. Currency NGN
@@ -630,17 +783,8 @@ async function startServer() {
   // 8. Returns only authorization_url, access_code, reference
   // 9. Does NOT activate subscription at initialization
   // 10. Handles errors safely without exposing secret keys
-  app.post('/api/payments/paystack/initialize', requireAuth, async (req, res) => {
+  app.post('/api/payments/paystack/initialize', requireAuth, requireEmailVerified, async (req, res) => {
     try {
-      // Require email verification before purchasing/activating subscription
-      if (req.user && req.user.emailVerified === false) {
-        return res.status(403).json({
-          status: false,
-          error: 'Please verify your email address before activating or upgrading a subscription.',
-          code: 'EMAIL_VERIFICATION_REQUIRED',
-        });
-      }
-
       const planRaw = (req.body.plan || req.body.planId || '').toString().trim().toUpperCase();
 
       // Accept ONLY plan identifiers: STARTER, PRO, BUSINESS
@@ -1105,12 +1249,6 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/reset-password', (req, res) => {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'Email is required' });
-    res.json({ success: true, message: `Password reset instructions sent to ${email}` });
-  });
-
   // --- ONBOARDING FLOW ---
   app.post('/api/business/onboarding', requireAuth, async (req, res) => {
     try {
@@ -1195,7 +1333,7 @@ async function startServer() {
     res.json(req.business!);
   });
 
-  app.put('/api/business/profile', requireAuth, async (req, res) => {
+  app.put('/api/business/profile', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const updated = await db.businesses.update(req.businessId!, req.body);
       if (!updated) return res.status(404).json({ error: 'Business not found' });
@@ -1218,7 +1356,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/products', requireAuth, requireActiveSubscription('product'), async (req, res) => {
+  app.post('/api/products', requireAuth, requireEmailVerified, requireActiveSubscription('product'), async (req, res) => {
     try {
       const businessId = req.businessId!;
       const { name, price, category, description, images, stockQuantity, sku, status, variants } = req.body;
@@ -1274,7 +1412,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/products/:id', requireAuth, async (req, res) => {
+  app.put('/api/products/:id', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { id } = req.params;
       const updated = await db.products.update(id, req.businessId!, req.body);
@@ -1287,7 +1425,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/products/:id', requireAuth, async (req, res) => {
+  app.delete('/api/products/:id', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { id } = req.params;
       const success = await db.products.delete(id, req.businessId!);
@@ -1323,7 +1461,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/customers', requireAuth, requireActiveSubscription('customer'), async (req, res) => {
+  app.post('/api/customers', requireAuth, requireEmailVerified, requireActiveSubscription('customer'), async (req, res) => {
     try {
       const businessId = req.businessId!;
       const { name, phone, email, location, status, notes } = req.body;
@@ -1365,7 +1503,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/customers/:id', requireAuth, async (req, res) => {
+  app.put('/api/customers/:id', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { id } = req.params;
       const updated = await db.customers.update(id, req.businessId!, req.body);
@@ -1378,7 +1516,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/customers/:id', requireAuth, async (req, res) => {
+  app.delete('/api/customers/:id', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { id } = req.params;
       const success = await db.customers.delete(id, req.businessId!);
@@ -1414,7 +1552,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/orders', requireAuth, requireActiveSubscription('order'), async (req, res) => {
+  app.post('/api/orders', requireAuth, requireEmailVerified, requireActiveSubscription('order'), async (req, res) => {
     try {
       const businessId = req.businessId!;
       const { customerId, items, deliveryFee, discount, deliveryAddress, notes, paymentStatus, orderStatus, idempotencyKey } = req.body;
@@ -1507,7 +1645,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/orders/:id', requireAuth, async (req, res) => {
+  app.put('/api/orders/:id', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { id } = req.params;
       const updated = await db.orders.update(id, req.businessId!, req.body);
@@ -1520,7 +1658,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/orders/:id', requireAuth, async (req, res) => {
+  app.delete('/api/orders/:id', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { id } = req.params;
       const success = await db.orders.delete(id, req.businessId!);
@@ -1544,7 +1682,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/follow-ups', requireAuth, requireActiveSubscription('follow_up'), async (req, res) => {
+  app.post('/api/follow-ups', requireAuth, requireEmailVerified, requireActiveSubscription('follow_up'), async (req, res) => {
     try {
       const businessId = req.businessId!;
       const { customerId, customerName, customerPhone, reason, suggestedMessage, dueDate } = req.body;
@@ -1576,7 +1714,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/follow-ups/:id', requireAuth, async (req, res) => {
+  app.put('/api/follow-ups/:id', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { id } = req.params;
       const updated = await db.followUps.update(id, req.businessId!, req.body);
@@ -1589,7 +1727,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/follow-ups/:id', requireAuth, async (req, res) => {
+  app.delete('/api/follow-ups/:id', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const { id } = req.params;
       const success = await db.followUps.delete(id, req.businessId!);
@@ -1613,7 +1751,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/settings', requireAuth, async (req, res) => {
+  app.put('/api/settings', requireAuth, requireEmailVerified, async (req, res) => {
     try {
       const updated = await db.settings.update(req.businessId!, req.body);
       await db.persist();
@@ -1625,7 +1763,7 @@ async function startServer() {
   });
 
   // --- AI ASSISTANT ROUTES ---
-  app.post('/api/ai/generate-reply', requireAuth, requireActiveSubscription('ai_analysis'), async (req, res) => {
+  app.post('/api/ai/generate-reply', requireAuth, requireEmailVerified, requireActiveSubscription('ai_analysis'), async (req, res) => {
     try {
       const businessId = req.businessId!;
       const business = req.business!;
@@ -1655,7 +1793,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/ai/adjust-reply', requireAuth, requireActiveSubscription('ai_analysis'), async (req, res) => {
+  app.post('/api/ai/adjust-reply', requireAuth, requireEmailVerified, requireActiveSubscription('ai_analysis'), async (req, res) => {
     try {
       const businessId = req.businessId!;
       const business = req.business!;
@@ -1683,7 +1821,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/ai/generate-followup', requireAuth, requireActiveSubscription('follow_up'), async (req, res) => {
+  app.post('/api/ai/generate-followup', requireAuth, requireEmailVerified, requireActiveSubscription('follow_up'), async (req, res) => {
     try {
       const businessId = req.businessId!;
       const business = req.business!;
@@ -1722,7 +1860,7 @@ async function startServer() {
   });
 
   // --- CONVERSATION ANALYZER ROUTES ---
-  app.post(['/api/conversations/analyze', '/api/ai/analyze'], requireAuth, requireActiveSubscription('ai_analysis'), async (req, res) => {
+  app.post(['/api/conversations/analyze', '/api/ai/analyze'], requireAuth, requireEmailVerified, requireActiveSubscription('ai_analysis'), async (req, res) => {
     try {
       const businessId = req.businessId!;
       const business = req.business!;
@@ -1810,7 +1948,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/conversations/:id/customer', requireAuth, requireActiveSubscription('customer'), async (req, res) => {
+  app.post('/api/conversations/:id/customer', requireAuth, requireEmailVerified, requireActiveSubscription('customer'), async (req, res) => {
     try {
       const { id } = req.params;
       const businessId = req.businessId!;
@@ -1862,7 +2000,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/conversations/:id/order', requireAuth, requireActiveSubscription('order'), async (req, res) => {
+  app.post('/api/conversations/:id/order', requireAuth, requireEmailVerified, requireActiveSubscription('order'), async (req, res) => {
     try {
       const { id } = req.params;
       const businessId = req.businessId!;
@@ -1945,7 +2083,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/conversations/:id/follow-up', requireAuth, requireActiveSubscription('follow_up'), async (req, res) => {
+  app.post('/api/conversations/:id/follow-up', requireAuth, requireEmailVerified, requireActiveSubscription('follow_up'), async (req, res) => {
     try {
       const { id } = req.params;
       const businessId = req.businessId!;
@@ -1983,7 +2121,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/conversations/:id/adjust-reply', requireAuth, requireActiveSubscription('ai_analysis'), async (req, res) => {
+  app.post('/api/conversations/:id/adjust-reply', requireAuth, requireEmailVerified, requireActiveSubscription('ai_analysis'), async (req, res) => {
     try {
       const { id } = req.params;
       const businessId = req.businessId!;
