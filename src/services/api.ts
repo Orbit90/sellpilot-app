@@ -118,6 +118,12 @@ export const api = {
       body: JSON.stringify({ token, password }),
     }),
 
+  changePassword: (data: { currentPassword: string; newPassword: string }) =>
+    request<{ success: boolean; message: string }>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   verifyEmail: (token: string) =>
     request<{ success: boolean; message: string; user?: User }>('/api/auth/verify-email', {
       method: 'POST',

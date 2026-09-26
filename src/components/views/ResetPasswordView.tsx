@@ -31,8 +31,8 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({ onDismiss 
     e.preventDefault();
     setErrorMessage(null);
 
-    if (newPassword.length < 6) {
-      setErrorMessage('Password must be at least 6 characters long.');
+    if (newPassword.length < 8 || newPassword.length > 128) {
+      setErrorMessage('Password must be between 8 and 128 characters.');
       return;
     }
 
@@ -155,8 +155,9 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({ onDismiss 
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
-                    minLength={6}
-                    placeholder="At least 6 characters"
+                    minLength={8}
+                    maxLength={128}
+                    placeholder="Between 8 and 128 characters"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     className="w-full pl-10 pr-10 py-2.5 text-sm bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500/30"
@@ -169,6 +170,9 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({ onDismiss 
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Password must be between 8 and 128 characters.
+                </p>
               </div>
 
               <div>
@@ -180,7 +184,8 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({ onDismiss 
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
-                    minLength={6}
+                    minLength={8}
+                    maxLength={128}
                     placeholder="Repeat new password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}

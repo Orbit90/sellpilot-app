@@ -2,6 +2,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import express from 'express';
+import helmet from 'helmet';
+import { createCorsMiddleware } from './server/cors';
+import { globalApiRateLimiter } from './server/rateLimiter';
 import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
@@ -9,7 +12,7 @@ import { createServer as createViteServer } from 'vite';
 import { db } from './server/db';
 import { analyzeConversation, generateAIReply, generateFollowUpMessage } from './server/gemini';
 import { Business, ConversationAnalysis, Customer, Order, Product, User, SubscriptionMetric } from './src/types';
-import { generateToken, hashPassword, sanitizeUser, verifyPassword } from './server/auth';
+import { generateToken, hashPassword, sanitizeUser, verifyPassword, validatePasswordPolicy } from './server/auth';
 import { DEMO_BUSINESS_ID, DEMO_USER_ID } from './src/data/demoData';
 import {
   ensureBusinessSubscription,
@@ -62,6 +65,87 @@ async function startServer() {
   // On Render/external hosts, listen on assigned process.env.PORT (defaults to 3000)
   const PORT = Number(process.env.PORT) || 3000;
 
+  // Trust reverse proxy (Render, Cloud Run, load balancers) so req.protocol and req.secure reflect TLS termination
+  app.set('trust proxy', 1);
+
+  // --- PHASE 3, STEP 1: HELMET SECURITY HEADERS ---
+  // Applies standard HTTP security headers to protect against common web vulnerabilities
+  // (Clickjacking, MIME sniffing, XSS, insecure protocol downgrade, etc.)
+  // Configured specifically for SellPilot's architecture:
+  // - Content Security Policy (CSP) permits Google Fonts, Unsplash imagery, Paystack checkout, and Vite dev scripts
+  // - CSP frameAncestors protects against clickjacking while allowing authorized AI Studio preview frames
+  // - Cross-Origin Embedder Policy (COEP) is set to false to prevent blocking external CDN images (Unsplash)
+  // - Cross-Origin Resource Policy (CORP) is set to 'cross-origin' for public assets
+  // - Cross-Origin Opener Policy (COOP) is disabled so iframe contexts are not broken
+  // - frameguard is set to false in favor of CSP frame-ancestors to support the preview iframe
+  // - Strict-Transport-Security (HSTS) is enabled with 180-day max-age and subdomains
+  // - X-Powered-By is suppressed
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: [
+            "'self'",
+            "'unsafe-inline'",
+            "'unsafe-eval'",
+            'blob:',
+            'https://*.google.com',
+            'https://*.googleusercontent.com',
+            'https://checkout.paystack.com',
+            'https://js.paystack.co',
+          ],
+          scriptSrcAttr: ["'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://*.google.com'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+          imgSrc: ["'self'", 'data:', 'blob:', 'https://images.unsplash.com', 'https:'],
+          connectSrc: [
+            "'self'",
+            'ws:',
+            'wss:',
+            'https://api.paystack.co',
+            'https://images.unsplash.com',
+            'https:',
+          ],
+          frameSrc: ["'self'", 'https://checkout.paystack.com'],
+          frameAncestors: [
+            "'self'",
+            'https://*.run.app',
+            'https://*.google.com',
+            'https://*.googleusercontent.com',
+          ],
+          formAction: ["'self'", 'https://checkout.paystack.com'],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null,
+        },
+      },
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginOpenerPolicy: false,
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+      frameguard: false,
+      hsts: {
+        maxAge: 15552000,
+        includeSubDomains: true,
+      },
+      noSniff: true,
+      originAgentCluster: true,
+      dnsPrefetchControl: { allow: false },
+      ieNoOpen: true,
+      permittedCrossDomainPolicies: { permittedPolicies: 'none' },
+      xssFilter: true,
+      hidePoweredBy: true,
+    })
+  );
+
+  // --- PHASE 3, STEP 2: RESTRICT CORS FOR SELLPILOT EXPRESS API ---
+  // Restricts cross-origin browser requests to trusted SellPilot origins derived from APP_URL.
+  // Rejects arbitrary third-party origins, forbids origin: '*' on authenticated routes,
+  // permits local development only when NODE_ENV !== 'production', and handles preflight OPTIONS cleanly.
+  app.use(createCorsMiddleware());
+  app.options('*', createCorsMiddleware());
+
   app.use(
     express.json({
       limit: '10mb',
@@ -70,6 +154,13 @@ async function startServer() {
       },
     })
   );
+
+  // --- PHASE 3, STEP 3: GLOBAL API RATE LIMITING ---
+  // Protects all /api/* routes from brute force, enumeration, and API flooding.
+  // Standard IETF & legacy X-RateLimit headers emitted.
+  // Returns HTTP 429 Too Many Requests when threshold exceeded.
+  // Excludes automated Paystack webhook delivery and CORS preflight OPTIONS requests.
+  app.use('/api', globalApiRateLimiter);
 
   // --- STRICT AUTHENTICATION & MULTI-TENANT MIDDLEWARE ---
   // Guarantees data isolation: req.businessId is derived strictly from the verified session!
@@ -145,8 +236,10 @@ async function startServer() {
         return res.status(400).json({ error: 'Name, email, password, and business name are required' });
       }
 
-      if (password.length < 6) {
-        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+      // Enforce NIST-aligned password policy (8 to 128 characters)
+      const passwordCheck = validatePasswordPolicy(password);
+      if (!passwordCheck.valid) {
+        return res.status(400).json({ error: passwordCheck.error });
       }
 
       // Registration rate limit check
@@ -639,9 +732,10 @@ async function startServer() {
         return res.status(400).json({ error: 'New password is required.' });
       }
 
-      // Enforce the same password policy used by normal registration
-      if (password.length < 6) {
-        return res.status(400).json({ error: 'Password must be at least 6 characters' });
+      // Enforce NIST-aligned password policy (8 to 128 characters)
+      const passwordCheck = validatePasswordPolicy(password);
+      if (!passwordCheck.valid) {
+        return res.status(400).json({ error: passwordCheck.error });
       }
 
       const tokenHash = hashPasswordResetToken(token.trim());
@@ -701,6 +795,44 @@ async function startServer() {
     } catch (err: any) {
       console.error('[Auth] Confirm password reset error');
       return res.status(500).json({ error: 'Failed to reset password. Please try again.' });
+    }
+  });
+
+  // POST /api/auth/change-password
+  // Allows authenticated user to update their password under NIST length policy
+  app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+    try {
+      const { currentPassword, newPassword } = req.body || {};
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ error: 'Current password and new password are required.' });
+      }
+
+      const user = await db.users.findById(req.user!.id);
+      if (!user || !user.passwordHash || !user.passwordSalt) {
+        return res.status(404).json({ error: 'User account not found.' });
+      }
+
+      const isCurrentValid = verifyPassword(currentPassword, user.passwordHash, user.passwordSalt);
+      if (!isCurrentValid) {
+        return res.status(401).json({ error: 'Current password is incorrect.' });
+      }
+
+      const passwordCheck = validatePasswordPolicy(newPassword);
+      if (!passwordCheck.valid) {
+        return res.status(400).json({ error: passwordCheck.error });
+      }
+
+      const { hash, salt } = hashPassword(newPassword);
+      await db.users.update(user.id, {
+        passwordHash: hash,
+        passwordSalt: salt,
+      });
+      await db.persist();
+
+      return res.json({ success: true, message: 'Password updated successfully.' });
+    } catch (err: any) {
+      console.error('[Auth] Change password error:', err);
+      return res.status(500).json({ error: 'Failed to update password. Please try again.' });
     }
   });
 

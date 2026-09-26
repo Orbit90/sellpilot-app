@@ -2335,17 +2335,18 @@ export interface PasswordResetTokenRecord {
 }
 
 export const passwordResetTokensRepo = {
-  async create(token: { id: string; userId: string; tokenHash: string; expiresAt: Date }): Promise<PasswordResetTokenRecord> {
+  async create(token: { id: string; userId: string; tokenHash: string; expiresAt: Date | string }): Promise<PasswordResetTokenRecord> {
+    const expiresIso = token.expiresAt instanceof Date ? token.expiresAt.toISOString() : new Date(token.expiresAt).toISOString();
     await query(
       `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
        VALUES ($1, $2, $3, $4, NOW())`,
-      [token.id, token.userId, token.tokenHash, token.expiresAt.toISOString()]
+      [token.id, token.userId, token.tokenHash, expiresIso]
     );
     return {
       id: token.id,
       userId: token.userId,
       tokenHash: token.tokenHash,
-      expiresAt: token.expiresAt.toISOString(),
+      expiresAt: expiresIso,
       usedAt: null,
       createdAt: new Date().toISOString(),
     };
