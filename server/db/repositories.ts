@@ -1,4 +1,5 @@
 import { query, withTransaction } from './pool';
+import { hashSessionToken } from '../auth';
 import {
   Business,
   BusinessSettings,
@@ -305,17 +306,31 @@ export const businessesRepo = {
 // 3. SESSIONS REPOSITORY
 // ==========================================
 export const sessionsRepo = {
+  /**
+   * Looks up an active session by hashing the presented raw token
+   * and matching it against the stored token_hash.
+   */
   async findByToken(token: string): Promise<Session | null> {
-    const res = await query('SELECT * FROM sessions WHERE token = $1', [token]);
+    if (!token || typeof token !== 'string') return null;
+    const tokenHash = hashSessionToken(token);
+    return this.findByTokenHash(tokenHash);
+  },
+
+  /**
+   * Looks up an active session by its SHA-256 token hash.
+   */
+  async findByTokenHash(tokenHash: string): Promise<Session | null> {
+    if (!tokenHash || typeof tokenHash !== 'string') return null;
+    const res = await query('SELECT * FROM sessions WHERE token_hash = $1', [tokenHash]);
     if (res.rows.length === 0) return null;
     const r = res.rows[0];
     const exp = new Date(r.expires_at).getTime();
     if (Date.now() > exp) {
-      await query('DELETE FROM sessions WHERE token = $1', [token]);
+      await query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
       return null;
     }
     return {
-      token: r.token,
+      tokenHash: r.token_hash,
       userId: r.user_id,
       businessId: r.business_id,
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
@@ -323,33 +338,74 @@ export const sessionsRepo = {
     };
   },
 
-  async create(session: Session): Promise<Session> {
+  /**
+   * Creates a session by storing ONLY its cryptographic SHA-256 hash.
+   * The raw session token is never written to PostgreSQL.
+   */
+  async create(session: { token?: string; tokenHash?: string; userId: string; businessId: string; createdAt?: string; expiresAt?: string }): Promise<Session> {
+    const tokenHash = session.tokenHash || (session.token ? hashSessionToken(session.token) : null);
+    if (!tokenHash) {
+      throw new Error('Cannot create session without valid token or tokenHash');
+    }
+    const createdAt = session.createdAt ? new Date(session.createdAt).toISOString() : new Date().toISOString();
+    const expiresAt = session.expiresAt ? new Date(session.expiresAt).toISOString() : new Date().toISOString();
+
     await query(
-      `INSERT INTO sessions (token, user_id, business_id, created_at, expires_at)
+      `INSERT INTO sessions (token_hash, user_id, business_id, created_at, expires_at)
        VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (token) DO UPDATE SET
+       ON CONFLICT (token_hash) DO UPDATE SET
          user_id = EXCLUDED.user_id,
          business_id = EXCLUDED.business_id,
          expires_at = EXCLUDED.expires_at`,
       [
-        session.token,
+        tokenHash,
         session.userId,
         session.businessId,
-        session.createdAt ? new Date(session.createdAt).toISOString() : new Date().toISOString(),
-        session.expiresAt ? new Date(session.expiresAt).toISOString() : new Date().toISOString(),
+        createdAt,
+        expiresAt,
       ]
     );
-    return session;
+    return {
+      tokenHash,
+      userId: session.userId,
+      businessId: session.businessId,
+      createdAt,
+      expiresAt,
+    };
   },
 
+  /**
+   * Invalidates a session by hashing the presented raw token and deleting the record.
+   */
   async deleteByToken(token: string): Promise<boolean> {
-    const res = await query('DELETE FROM sessions WHERE token = $1', [token]);
+    if (!token || typeof token !== 'string') return false;
+    const tokenHash = hashSessionToken(token);
+    return this.deleteByTokenHash(tokenHash);
+  },
+
+  /**
+   * Invalidates a session directly by its SHA-256 token hash.
+   */
+  async deleteByTokenHash(tokenHash: string): Promise<boolean> {
+    if (!tokenHash || typeof tokenHash !== 'string') return false;
+    const res = await query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
     return (res.rowCount || 0) > 0;
   },
 
+  /**
+   * Invalidates all sessions belonging to a specific user (e.g. on password reset or account revocation).
+   */
   async deleteByUserId(userId: string): Promise<boolean> {
     const res = await query('DELETE FROM sessions WHERE user_id = $1', [userId]);
     return (res.rowCount || 0) > 0;
+  },
+
+  /**
+   * Housekeeping: removes all expired sessions from the database.
+   */
+  async cleanExpiredSessions(): Promise<number> {
+    const res = await query('DELETE FROM sessions WHERE expires_at < NOW()');
+    return res.rowCount || 0;
   },
 };
 

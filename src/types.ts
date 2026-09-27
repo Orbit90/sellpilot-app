@@ -116,7 +116,8 @@ export interface SubscriptionSummary {
 }
 
 export interface Session {
-  token: string;
+  tokenHash?: string;
+  token?: string;
   userId: string;
   businessId: string;
   createdAt: string;

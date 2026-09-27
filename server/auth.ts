@@ -56,6 +56,15 @@ export function generateToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+/**
+ * Computes a cryptographically secure one-way SHA-256 hash of a session token.
+ * SellPilot stores only this hash in the database, never the raw token.
+ */
+export function hashSessionToken(token: string): string {
+  if (!token || typeof token !== 'string') return '';
+  return crypto.createHash('sha256').update(token.trim()).digest('hex');
+}
+
 export function sanitizeUser(user: User): Omit<User, 'passwordHash' | 'passwordSalt'> {
   const { passwordHash, passwordSalt, ...safeUser } = user;
   return safeUser;

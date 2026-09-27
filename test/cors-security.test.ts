@@ -161,6 +161,30 @@ async function runTests() {
     isUntrustedRejectedInDev === false
   );
 
+  // Test 8b: Regional Cloud Run subdomains and ais-pre are allowed in development mode
+  const isRegionalCloudRunAllowed = isOriginAllowed(
+    'https://ais-dev-5gn6uf5utiuagykvmipi66-766179940387.europe-west2.run.app',
+    devEnv
+  );
+  const isPreCloudRunAllowed = isOriginAllowed(
+    'https://ais-pre-5gn6uf5utiuagykvmipi66-766179940387.europe-west2.run.app',
+    devEnv
+  );
+  record(
+    82,
+    'Regional Cloud Run preview subdomains (*.europe-west2.run.app, ais-pre) are allowed in dev',
+    isRegionalCloudRunAllowed === true && isPreCloudRunAllowed === true
+  );
+
+  // Test 8c: Google AI Studio and preview domains are allowed in development mode
+  const isAiStudioAllowed = isOriginAllowed('https://aistudio.google.com', devEnv);
+  const isGoogleUserContentAllowed = isOriginAllowed('https://12345.googleusercontent.com', devEnv);
+  record(
+    83,
+    'Google AI Studio preview origins (aistudio.google.com, googleusercontent.com) are allowed in dev',
+    isAiStudioAllowed === true && isGoogleUserContentAllowed === true
+  );
+
   // Test 9: Server-to-server requests with no Origin (Paystack webhooks, cron, curl) are allowed
   const noOriginAllowedProd = isOriginAllowed(undefined, prodEnv);
   const noOriginAllowedDev = isOriginAllowed(undefined, devEnv);

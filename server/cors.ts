@@ -36,6 +36,20 @@ export function getTrustedProductionOrigins(env: NodeJS.ProcessEnv = process.env
   const appUrlOrigin = normalizeOrigin(env.APP_URL);
   if (appUrlOrigin) {
     origins.push(appUrlOrigin);
+
+    // If APP_URL is a preview domain (e.g. ais-dev-...), include matching ais-pre- origin
+    if (appUrlOrigin.includes('ais-dev-')) {
+      const preOrigin = appUrlOrigin.replace('ais-dev-', 'ais-pre-');
+      if (!origins.includes(preOrigin)) {
+        origins.push(preOrigin);
+      }
+    }
+    if (appUrlOrigin.includes('ais-pre-')) {
+      const devOrigin = appUrlOrigin.replace('ais-pre-', 'ais-dev-');
+      if (!origins.includes(devOrigin)) {
+        origins.push(devOrigin);
+      }
+    }
   }
 
   // 2. Secondary: ALLOWED_ORIGINS comma-separated list
@@ -90,15 +104,22 @@ export function isOriginAllowed(origin?: string, env: NodeJS.ProcessEnv = proces
 
   // Check development-only origins
   if (!isProduction) {
-    // Standard localhost / 127.0.0.1 on any port (e.g., :3000, :5173)
-    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(cleanOrigin);
+    // Standard localhost / 127.0.0.1 on any port (e.g., :3000, :5173), http or https
+    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(cleanOrigin);
     if (isLocalhost) {
       return true;
     }
 
     // Google Cloud Run / AI Studio preview subdomains in development
-    const isCloudRunPreview = /^https:\/\/[a-z0-9\-]+\.run\.app$/.test(cleanOrigin);
+    // Supports multi-level region subdomains, e.g. ais-dev-...europe-west2.run.app, ais-pre-...run.app
+    const isCloudRunPreview = /^https:\/\/([a-z0-9\-]+\.)+run\.app(:\d+)?$/.test(cleanOrigin);
     if (isCloudRunPreview) {
+      return true;
+    }
+
+    // Google AI Studio / Google Cloud preview web environments
+    const isGooglePreview = /^https:\/\/([a-z0-9\-]+\.)*(google\.com|googleusercontent\.com|aistudio\.google\.com|google\.dev)(:\d+)?$/.test(cleanOrigin);
+    if (isGooglePreview) {
       return true;
     }
   }

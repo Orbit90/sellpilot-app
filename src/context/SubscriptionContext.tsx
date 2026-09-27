@@ -63,8 +63,9 @@ export const SubscriptionProvider: React.FC<{
       setIsLoading(true);
       const data = await api.getSubscription();
       setSubscription(data);
-    } catch (err) {
-      console.error('Failed to load subscription summary:', err);
+    } catch (err: any) {
+      // Gracefully handle background refresh errors without unhandled error alerts
+      console.warn('Subscription status could not be refreshed:', err?.message || err);
     } finally {
       setIsLoading(false);
     }

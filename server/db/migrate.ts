@@ -12,7 +12,7 @@ import {
   DEMO_BUSINESS_ID,
   DEMO_USER_ID,
 } from '../../src/data/demoData';
-import { hashPassword } from '../auth';
+import { hashPassword, hashSessionToken } from '../auth';
 import { syncOrderSequence } from './repositories';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -43,12 +43,19 @@ export async function runMigrations(): Promise<void> {
           ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ DEFAULT NOW();
         END IF;
+        IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'sessions') THEN
+          ALTER TABLE sessions ADD COLUMN IF NOT EXISTS token_hash TEXT;
+        END IF;
       END
       $$;
     `);
   } catch {
     // Non-fatal if table doesn't exist yet or if using non-standard dialect
   }
+
+  try {
+    await pool.query('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS token_hash TEXT');
+  } catch {}
 
   if (schemaSql) {
     try {
@@ -101,6 +108,85 @@ export async function runMigrations(): Promise<void> {
   // Ensure password reset schema
   await ensurePasswordResetSchema(pool);
   console.log('Password reset architecture synchronized.');
+
+  // Ensure session token hash schema & migration for existing sessions
+  await ensureSessionTokenHash(pool);
+  console.log('Session token hashing architecture synchronized.');
+}
+
+async function ensureSessionTokenHash(pool: any): Promise<void> {
+  // 1. Ensure token_hash column exists
+  await pool.query(`
+    ALTER TABLE sessions ADD COLUMN IF NOT EXISTS token_hash TEXT;
+  `);
+
+  // 2. Check if legacy 'token' column exists
+  const tokenColCheck = await pool.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_name = 'sessions' AND column_name = 'token'
+  `);
+
+  const hasLegacyTokenCol = (tokenColCheck.rows && tokenColCheck.rows.length > 0);
+
+  if (hasLegacyTokenCol) {
+    // Migrate existing sessions safely: compute SHA-256 hash for all existing records
+    // This preserves active user logins so no authenticated user is abruptly logged out
+    const legacySessions = await pool.query(`
+      SELECT token FROM sessions WHERE token IS NOT NULL AND (token_hash IS NULL OR token_hash = '')
+    `);
+
+    for (const row of legacySessions.rows) {
+      if (row.token) {
+        const hash = hashSessionToken(row.token);
+        await pool.query(
+          `UPDATE sessions SET token_hash = $1 WHERE token = $2`,
+          [hash, row.token]
+        );
+      }
+    }
+
+    // Clean up expired sessions
+    await pool.query(`DELETE FROM sessions WHERE expires_at < NOW()`);
+
+    // Remove any rows that have no token_hash
+    await pool.query(`DELETE FROM sessions WHERE token_hash IS NULL OR token_hash = ''`);
+
+    // Drop legacy primary key constraint and legacy index on token
+    try {
+      await pool.query(`ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_pkey CASCADE`);
+    } catch {
+      // Non-fatal if already dropped or constraint has different name
+    }
+    try {
+      await pool.query(`DROP INDEX IF EXISTS idx_sessions_token`);
+    } catch {}
+
+    // Drop the legacy raw token column completely so raw tokens are NEVER stored in PostgreSQL
+    try {
+      await pool.query(`ALTER TABLE sessions DROP COLUMN IF EXISTS token`);
+    } catch (err: any) {
+      console.warn(`Could not drop legacy token column: ${err.message}`);
+    }
+  }
+
+  // 3. Make token_hash NOT NULL and PRIMARY KEY
+  try {
+    await pool.query(`ALTER TABLE sessions ALTER COLUMN token_hash SET NOT NULL`);
+  } catch {}
+
+  try {
+    await pool.query(`ALTER TABLE sessions ADD PRIMARY KEY (token_hash)`);
+  } catch {
+    // Primary key might already exist
+  }
+
+  // 4. Ensure indices exist for fast lookups
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_business_id ON sessions(business_id);
+  `);
 }
 
 async function ensurePasswordResetSchema(pool: any): Promise<void> {
@@ -342,13 +428,15 @@ export async function importFromExistingJson(): Promise<boolean> {
 
       // 3. Sessions
       for (const s of data.sessions || []) {
+        const tokenHash = s.tokenHash || s.token_hash || (s.token ? hashSessionToken(s.token) : null);
+        if (!tokenHash) continue;
         await client.query(
           `INSERT INTO sessions (
-            token, user_id, business_id, created_at, expires_at
+            token_hash, user_id, business_id, created_at, expires_at
           ) VALUES ($1, $2, $3, $4, $5)
-          ON CONFLICT (token) DO NOTHING`,
+          ON CONFLICT (token_hash) DO NOTHING`,
           [
-            s.token,
+            tokenHash,
             s.userId || s.user_id,
             s.businessId || s.business_id,
             s.createdAt || s.created_at || new Date().toISOString(),

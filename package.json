@@ -20,7 +20,8 @@
     "test:build-security": "tsx test/build-output-security.test.ts",
     "test:helmet": "tsx test/helmet-security-headers.test.ts",
     "test:cors": "tsx test/cors-security.test.ts",
-    "test:rate-limit": "tsx test/rate-limit.test.ts"
+    "test:rate-limit": "tsx test/rate-limit.test.ts",
+    "test:session-hash": "tsx test/session-token-hash.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
