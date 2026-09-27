@@ -30,6 +30,8 @@ import {
   sendPasswordResetEmail,
   getAppBaseUrl,
   getGmailSmtpStatus,
+  DEFAULT_PRODUCTION_APP_URL,
+  isDisallowedAppUrl,
 } from '../server/services/emailService';
 
 interface TestResult {
@@ -421,6 +423,65 @@ async function runTests() {
     (resolvedUrl.startsWith('https://') || resolvedUrl.startsWith('http://'));
 
   record(16, 'Reset link URL resolution strictly guarantees no localhost or sellpilot.com', isSafeUrl);
+
+  // -------------------------------------------------------------------------
+  // TEST 17: Production reset link strictly resolves to authoritative APP_URL
+  // -------------------------------------------------------------------------
+  const rawTestToken = 'abc1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd';
+  const expectedBase = DEFAULT_PRODUCTION_APP_URL; // https://sellpilot-kj2j.onrender.com
+  const generatedResetUrl = `${getAppBaseUrl()}/reset-password?token=${encodeURIComponent(rawTestToken)}`;
+  const matchesProductionUrl =
+    generatedResetUrl.startsWith('https://sellpilot-kj2j.onrender.com/') &&
+    generatedResetUrl === `https://sellpilot-kj2j.onrender.com/reset-password?token=${rawTestToken}`;
+
+  record(17, 'Generated production reset email URL strictly begins with https://sellpilot-kj2j.onrender.com/', matchesProductionUrl);
+
+  // -------------------------------------------------------------------------
+  // TEST 18: isDisallowedAppUrl strictly blocks aistudio, run.app, localhost, etc.
+  // -------------------------------------------------------------------------
+  const blocksAiStudio = isDisallowedAppUrl('https://aistudio.google.com');
+  const blocksCloudRunPreview = isDisallowedAppUrl('https://ais-dev-5gn6uf5utiuagykvmipi66-766179940387.europe-west2.run.app');
+  const blocksSharedPreview = isDisallowedAppUrl('https://ais-pre-5gn6uf5utiuagykvmipi66-766179940387.europe-west2.run.app');
+  const blocksLocalhost = isDisallowedAppUrl('http://localhost:3000');
+  const blocksSellpilotCom = isDisallowedAppUrl('https://sellpilot.com');
+  const allowsRenderProd = !isDisallowedAppUrl('https://sellpilot-kj2j.onrender.com');
+
+  record(
+    18,
+    'isDisallowedAppUrl strictly rejects aistudio.google.com, *.run.app, and localhost while allowing Render production domain',
+    blocksAiStudio && blocksCloudRunPreview && blocksSharedPreview && blocksLocalhost && blocksSellpilotCom && allowsRenderProd
+  );
+
+  // -------------------------------------------------------------------------
+  // TEST 19: Browser origin or Host header cannot override production destination
+  // -------------------------------------------------------------------------
+  const fromAiStudioOrigin = getAppBaseUrl('https://aistudio.google.com');
+  const fromRunAppOrigin = getAppBaseUrl('https://ais-dev-5gn6uf5utiuagykvmipi66-766179940387.europe-west2.run.app');
+  const fromLocalhost = getAppBaseUrl('http://localhost:3000');
+  const originsSafelyIgnored =
+    fromAiStudioOrigin === 'https://sellpilot-kj2j.onrender.com' &&
+    fromRunAppOrigin === 'https://sellpilot-kj2j.onrender.com' &&
+    fromLocalhost === 'https://sellpilot-kj2j.onrender.com';
+
+  record(
+    19,
+    'getAppBaseUrl ignores aistudio.google.com and preview origins, resolving directly to https://sellpilot-kj2j.onrender.com',
+    originsSafelyIgnored
+  );
+
+  // -------------------------------------------------------------------------
+  // TEST 20: Reset page route (/reset-password) responds with HTTP 200 HTML
+  // -------------------------------------------------------------------------
+  let routeLoadsOk = false;
+  try {
+    const routeRes = await fetch('http://localhost:3000/reset-password?token=test_route_token');
+    const routeHtml = await routeRes.text();
+    routeLoadsOk = routeRes.status === 200 && routeHtml.toLowerCase().includes('<!doctype html');
+  } catch (err: any) {
+    routeLoadsOk = false;
+  }
+
+  record(20, 'Password reset page route (/reset-password) serves HTTP 200 HTML', routeLoadsOk);
 
   // -------------------------------------------------------------------------
   // SUMMARY

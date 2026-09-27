@@ -700,13 +700,13 @@ async function startServer() {
       await db.persist();
 
       // Dispatch password reset email via existing Gmail SMTP service
-      const origin = (req.headers.origin as string) || (req.headers.host ? `${req.protocol}://${req.headers.host}` : undefined);
+      // Authoritative URL: APP_URL (defaults to https://sellpilot-kj2j.onrender.com)
+      // Never use aistudio.google.com, AI Studio preview URLs, localhost, or request Host headers
       try {
         await sendPasswordResetEmail({
           toEmail: user.email,
           userName: user.name,
           resetToken: rawToken,
-          reqOrigin: origin,
         });
       } catch (emailErr) {
         console.error('[Auth] Failed to dispatch password reset email via Gmail SMTP');

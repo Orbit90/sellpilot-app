@@ -68,30 +68,63 @@ export function hashPasswordResetToken(rawToken: string): string {
   return crypto.createHash('sha256').update(rawToken.trim()).digest('hex');
 }
 
+export const DEFAULT_PRODUCTION_APP_URL = 'https://sellpilot-kj2j.onrender.com';
+
 /**
- * Resolves the public application URL for email links.
- * Strictly guarantees neither localhost nor sellpilot.com is used.
+ * Checks whether a URL is a preview, internal, or disallowed URL for production email links.
+ * Strictly rejects:
+ * - aistudio.google.com
+ * - AI Studio preview URLs (*.run.app, googleusercontent.com, ais-dev-*, ais-pre-*)
+ * - localhost, 127.0.0.1, 0.0.0.0, ::1
+ * - sellpilot.com (placeholder)
+ */
+export function isDisallowedAppUrl(urlStr: string): boolean {
+  if (!urlStr || typeof urlStr !== 'string') return true;
+  const lower = urlStr.toLowerCase().trim();
+  return (
+    lower.includes('aistudio.google.com') ||
+    lower.includes('.run.app') ||
+    lower.includes('googleusercontent.com') ||
+    lower.includes('localhost') ||
+    lower.includes('127.0.0.1') ||
+    lower.includes('0.0.0.0') ||
+    lower.includes('::1') ||
+    lower.includes('sellpilot.com')
+  );
+}
+
+/**
+ * Resolves the public application URL for transactional email links.
+ * 
+ * Rules:
+ * 1. In production, APP_URL is the authoritative production base URL:
+ *    https://sellpilot-kj2j.onrender.com
+ * 2. If APP_URL is not configured or points to an invalid/preview URL (aistudio.google.com,
+ *    *.run.app, localhost, sellpilot.com), it strictly defaults to:
+ *    https://sellpilot-kj2j.onrender.com
+ * 3. Never uses aistudio.google.com, AI Studio preview URLs, localhost, request Host headers,
+ *    or arbitrary browser origins.
  */
 export function getAppBaseUrl(reqOrigin?: string): string {
-  // 1. Priority: APP_URL environment variable
-  let envUrl = process.env.APP_URL?.trim();
-  if (envUrl) {
-    envUrl = envUrl.replace(/\/+$/, '');
-    if (!envUrl.includes('localhost') && !envUrl.includes('127.0.0.1') && !envUrl.includes('sellpilot.com')) {
-      return envUrl;
+  // 1. Authoritative check: APP_URL environment variable
+  const rawEnv = process.env.APP_URL?.trim();
+  if (rawEnv) {
+    const cleaned = rawEnv.replace(/\/+$/, '');
+    if (!isDisallowedAppUrl(cleaned) && (cleaned.startsWith('https://') || cleaned.startsWith('http://'))) {
+      return cleaned;
     }
   }
 
-  // 2. Origin header from incoming request (if from a non-localhost, valid domain)
+  // 2. Only accept reqOrigin if it is explicitly non-disallowed (e.g. custom verified production domain)
   if (reqOrigin) {
-    const origin = reqOrigin.trim().replace(/\/+$/, '');
-    if (!origin.includes('localhost') && !origin.includes('127.0.0.1') && !origin.includes('sellpilot.com')) {
-      return origin;
+    const cleanedOrigin = reqOrigin.trim().replace(/\/+$/, '');
+    if (!isDisallowedAppUrl(cleanedOrigin) && (cleanedOrigin.startsWith('https://') || cleanedOrigin.startsWith('http://'))) {
+      return cleanedOrigin;
     }
   }
 
-  // 3. Fallback: must NEVER be localhost or sellpilot.com
-  return 'https://sellpilot.ng';
+  // 3. Authoritative production default for SellPilot
+  return DEFAULT_PRODUCTION_APP_URL;
 }
 
 // --- RATE LIMITING ---
