@@ -39,6 +39,7 @@ interface AppContextType {
   business: Business | null;
   isLoggedIn: boolean;
   isOnboarding: boolean;
+  setIsOnboarding: (open: boolean) => void;
   isInitialized: boolean;
   login: (email: string, password?: string) => Promise<void>;
   signup: (data: { name: string; email: string; password?: string; businessName: string; businessCategory?: string }) => Promise<void>;
@@ -639,6 +640,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         business,
         isLoggedIn,
         isOnboarding,
+        setIsOnboarding,
         isInitialized,
         login,
         signup,

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   TrendingUp,
   ShoppingBag,
@@ -15,6 +15,10 @@ import {
   MessageSquareText,
   CheckCircle2,
   ShieldCheck,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { formatNaira, formatDate, formatRelativeTime } from '../../utils/formatters';
@@ -33,9 +37,55 @@ export const DashboardView: React.FC = () => {
     setActiveSection,
     setIsAddOrderOpen,
     setIsAddProductOpen,
+    setIsOnboarding,
     setViewingCustomer,
     openAIAssistantWithMessage,
   } = useApp();
+
+  const [isChecklistDismissed, setIsChecklistDismissed] = useState(false);
+  const [isChecklistExpanded, setIsChecklistExpanded] = useState(true);
+
+  // Store setup checklist milestones
+  const checklistItems = [
+    {
+      id: 'profile',
+      label: 'Store Profile & WhatsApp Number',
+      description: 'Configure store name and contact for customer messages',
+      done: Boolean(business?.name && business?.phone),
+      action: () => setIsOnboarding(true),
+    },
+    {
+      id: 'product',
+      label: 'Add First Hero Product to Catalog',
+      description: 'Add an item with image and price to start quoting sales',
+      done: products.length > 0,
+      action: () => setIsAddProductOpen(true),
+    },
+    {
+      id: 'delivery',
+      label: 'Configure Delivery & Dispatch Fees',
+      description: 'Set Lagos Mainland, Island, and nationwide courier fees',
+      done: Boolean(business?.deliveryInfo && business.deliveryInfo.trim().length > 10),
+      action: () => setIsOnboarding(true),
+    },
+    {
+      id: 'bank',
+      label: 'Set Up Bank Transfer Settlement',
+      description: 'Add your 10-digit NUBAN account to invoice customers',
+      done: Boolean(business?.paymentInstructions && business.paymentInstructions.trim().length > 10),
+      action: () => setIsOnboarding(true),
+    },
+    {
+      id: 'ai',
+      label: 'Test WhatsApp AI Sales Voice',
+      description: 'Calibrate sales persona and test customer chat replies',
+      done: conversations.length > 0 || Boolean(business?.onboardingCompleted),
+      action: () => setActiveSection('ai-assistant'),
+    },
+  ];
+
+  const completedCount = checklistItems.filter((i) => i.done).length;
+  const progressPercent = Math.round((completedCount / checklistItems.length) * 100);
 
   // Calculate stats dynamically
   // Today's sales: sum of orders placed in the last 24h or created today
@@ -132,6 +182,127 @@ export const DashboardView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* --- STORE SETUP & LAUNCH CHECKLIST --- */}
+      {!isChecklistDismissed && (
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden transition-all">
+          <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${
+                completedCount === checklistItems.length
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-teal-50 text-teal-700'
+              }`}>
+                {completedCount === checklistItems.length ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                ) : (
+                  <span>{progressPercent}%</span>
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-bold text-slate-900">
+                    {completedCount === checklistItems.length
+                      ? 'Store Setup Complete! Your Cockpit is Live 🎉'
+                      : 'Store Setup & Launch Checklist'}
+                  </h2>
+                  <span className="text-xs text-slate-500 font-medium">
+                    · {completedCount} of {checklistItems.length} completed
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {completedCount === checklistItems.length
+                    ? 'All systems ready: WhatsApp voice, delivery rates, bank details, and product catalog are configured.'
+                    : 'Complete these key milestones to calibrate your WhatsApp sales assistant and receive orders.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-center">
+              <button
+                type="button"
+                onClick={() => setIsOnboarding(true)}
+                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 transition-colors flex items-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-teal-600" />
+                <span>Relaunch Setup Wizard</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsChecklistExpanded(!isChecklistExpanded)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+                title={isChecklistExpanded ? 'Collapse checklist' : 'Expand checklist'}
+              >
+                {isChecklistExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              {completedCount === checklistItems.length && (
+                <button
+                  type="button"
+                  onClick={() => setIsChecklistDismissed(true)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+                  title="Dismiss checklist"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Progress Bar */}
+          <div className="w-full h-1 bg-slate-100">
+            <div
+              className="h-full bg-gradient-to-r from-teal-500 to-emerald-500 transition-all duration-500"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+
+          {/* Expanded Items */}
+          {isChecklistExpanded && (
+            <div className="p-4 sm:p-5 bg-slate-50/50 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {checklistItems.map((item) => (
+                <div
+                  key={item.id}
+                  className={`p-3 rounded-xl border flex items-start justify-between gap-2.5 transition-all ${
+                    item.done
+                      ? 'bg-white border-slate-200'
+                      : 'bg-white border-teal-200 shadow-sm'
+                  }`}
+                >
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <div className={`w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                      item.done ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'
+                    }`}>
+                      {item.done ? <Check className="w-3.5 h-3.5" /> : <div className="w-2 h-2 rounded-full bg-slate-300" />}
+                    </div>
+                    <div className="min-w-0">
+                      <span className={`text-xs font-bold block truncate ${item.done ? 'text-slate-800' : 'text-slate-900'}`}>
+                        {item.label}
+                      </span>
+                      <span className="text-[11px] text-slate-500 block truncate mt-0.5">
+                        {item.description}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={item.action}
+                    className={`text-[11px] font-bold px-2 py-1 rounded-md flex-shrink-0 transition-colors ${
+                      item.done
+                        ? 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                        : 'bg-teal-600 hover:bg-teal-500 text-white shadow-xs'
+                    }`}
+                  >
+                    {item.done ? 'Edit' : 'Set Up'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* --- 5 STATISTIC METRIC CARDS --- */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">

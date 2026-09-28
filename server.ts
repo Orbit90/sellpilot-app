@@ -1385,7 +1385,20 @@ async function startServer() {
   app.post('/api/business/onboarding', requireAuth, async (req, res) => {
     try {
       const businessId = req.businessId!;
-      const { name, category, location, phone, firstProduct, deliveryInfo, paymentInstructions } = req.body || {};
+      const {
+        name,
+        category,
+        location,
+        phone,
+        firstProduct,
+        deliveryInfo,
+        paymentInstructions,
+        returnPolicy,
+        currency,
+        description,
+        settings,
+        firstCustomer,
+      } = req.body || {};
 
       const updates: Partial<Business> = {
         onboardingCompleted: true,
@@ -1396,6 +1409,9 @@ async function startServer() {
       }
       if (category && typeof category === 'string') {
         updates.category = category as any;
+      }
+      if (description && typeof description === 'string') {
+        updates.description = description.trim();
       }
       if (location !== undefined && location !== null) {
         updates.location = typeof location === 'string' ? location.trim() : String(location);
@@ -1409,10 +1425,31 @@ async function startServer() {
       if (paymentInstructions !== undefined && paymentInstructions !== null) {
         updates.paymentInstructions = typeof paymentInstructions === 'string' ? paymentInstructions.trim() : String(paymentInstructions);
       }
+      if (returnPolicy !== undefined && returnPolicy !== null) {
+        updates.returnPolicy = typeof returnPolicy === 'string' ? returnPolicy.trim() : String(returnPolicy);
+      }
+      if (currency && typeof currency === 'string' && currency.trim()) {
+        updates.currency = currency.trim();
+      }
 
       let updatedBiz = await db.businesses.update(businessId, updates);
       if (!updatedBiz) {
         updatedBiz = await db.businesses.findById(businessId);
+      }
+
+      // Update AI settings if provided
+      if (settings && typeof settings === 'object') {
+        try {
+          await db.settings.update(businessId, {
+            defaultTone: settings.defaultTone || 'friendly',
+            language: settings.language || 'English (Nigerian)',
+            pidginEnabled: settings.pidginEnabled ?? settings.enablePidgin ?? true,
+            enablePidgin: settings.pidginEnabled ?? settings.enablePidgin ?? true,
+            quickReplies: Array.isArray(settings.quickReplies) ? settings.quickReplies : undefined,
+          });
+        } catch (settingsErr) {
+          console.warn('Non-fatal settings update warning during onboarding:', settingsErr);
+        }
       }
 
       // Optionally add their first product if provided
@@ -1444,6 +1481,28 @@ async function startServer() {
           await recordMetricUsage(businessId, 'product');
         } catch (prodErr) {
           console.warn('Non-fatal first product creation error during onboarding:', prodErr);
+        }
+      }
+
+      // Optionally add their first customer if provided
+      if (firstCustomer && typeof firstCustomer === 'object' && firstCustomer.name && String(firstCustomer.name).trim()) {
+        try {
+          await db.customers.create({
+            id: `cust_${Date.now()}`,
+            businessId,
+            name: String(firstCustomer.name).trim(),
+            phone: String(firstCustomer.phone || '').trim() || '+234 800 000 0000',
+            email: firstCustomer.email ? String(firstCustomer.email).trim() : undefined,
+            location: firstCustomer.location ? String(firstCustomer.location).trim() : 'Lagos, Nigeria',
+            ordersCount: 0,
+            totalSpent: 0,
+            status: 'New',
+            notes: firstCustomer.notes ? String(firstCustomer.notes).trim() : 'First customer added during onboarding',
+            interactions: [],
+            dateAdded: new Date().toISOString(),
+          });
+        } catch (custErr) {
+          console.warn('Non-fatal first customer creation error during onboarding:', custErr);
         }
       }
 

@@ -30,6 +30,7 @@ export const SettingsView: React.FC = () => {
     resetToDemoData,
     logout,
     showToast,
+    setIsOnboarding,
   } = useApp();
 
   // Business Profile Form
@@ -158,6 +159,26 @@ export const SettingsView: React.FC = () => {
       </div>
 
       <form onSubmit={handleSaveAll} className="space-y-6">
+        {/* Guided Onboarding Setup Wizard Banner */}
+        <div className="bg-gradient-to-r from-teal-950 via-slate-900 to-slate-900 text-white p-4 sm:p-5 rounded-2xl border border-teal-500/30 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-teal-400" />
+              <h2 className="text-sm font-bold text-white">Interactive Store Setup Wizard</h2>
+            </div>
+            <p className="text-xs text-slate-300">
+              Need to re-calibrate your store? Walk through the 6-step guided wizard for catalog, Nigerian dispatch fees, bank account, and WhatsApp sales voice.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsOnboarding(true)}
+            className="px-4 py-2 rounded-xl text-xs font-bold bg-teal-500 hover:bg-teal-400 text-slate-950 transition-colors shrink-0 shadow-sm"
+          >
+            Relaunch Setup Wizard
+          </button>
+        </div>
+
         {/* Business Profile Card */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
           <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
