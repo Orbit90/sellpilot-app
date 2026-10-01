@@ -394,4 +394,52 @@ export const api = {
     request<{ success: boolean; message: string }>('/api/data/reset-demo', {
       method: 'POST',
     }),
+
+  // Channels & Official WhatsApp Business Platform
+  getWhatsAppChannelStatus: () =>
+    request<{
+      configured: boolean;
+      status: string;
+      connection: any;
+      webhookUrl: string;
+      verifyTokenConfigured: boolean;
+      autopilotSettings: any;
+    }>('/api/channels/whatsapp/status'),
+
+  connectWhatsAppChannel: (data: {
+    phoneNumberId: string;
+    wabaId?: string;
+    accessToken: string;
+    displayName?: string;
+  }) =>
+    request<{ success: boolean; message: string; connection: any }>('/api/channels/whatsapp/connect', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  disconnectWhatsAppChannel: () =>
+    request<{ success: boolean; message: string }>('/api/channels/whatsapp/disconnect', {
+      method: 'POST',
+    }),
+
+  updateAutopilotSettings: (settings: any) =>
+    request<{ success: boolean; autopilotSettings: any }>('/api/channels/whatsapp/settings', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    }),
+
+  getWhatsAppHandoffs: () =>
+    request<{ handoffs: any[] }>('/api/channels/whatsapp/handoffs'),
+
+  resolveWhatsAppHandoff: (id: string, notes?: string) =>
+    request<{ success: boolean; handoff: any }>(`/api/channels/whatsapp/handoffs/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    }),
+
+  sendWhatsAppMessage: (to: string, text: string) =>
+    request<{ success: boolean; messageId: string }>('/api/channels/whatsapp/send', {
+      method: 'POST',
+      body: JSON.stringify({ to, text }),
+    }),
 };

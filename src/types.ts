@@ -350,3 +350,88 @@ export interface PaymentRecord {
   createdAt: string;
   updatedAt: string;
 }
+
+// ----------------------------------------------------
+// OFFICIAL CHANNEL INTEGRATIONS (WHATSAPP BUSINESS)
+// ----------------------------------------------------
+export type ChannelType = 'whatsapp';
+export type ChannelConnectionStatus = 'disconnected' | 'pending' | 'connected' | 'error';
+export type ChannelMessageDirection = 'inbound' | 'outbound';
+export type ChannelMessageStatus = 'received' | 'sent' | 'delivered' | 'read' | 'failed';
+export type HandoffStatus = 'pending_human' | 'in_progress' | 'resolved';
+export type HandoffReason = 'complaint' | 'negotiation' | 'uncertain_ai' | 'merchant_takeover' | 'out_of_scope';
+
+export interface AutopilotSettings {
+  mode: 'copilot' | 'autopilot';
+  autoReplyProductQuestions: boolean;
+  autoReplyAvailability: boolean;
+  autoReplyDelivery: boolean;
+  autoReplyPurchaseIntent: boolean;
+  allowAutoNegotiation: boolean; // default false
+  autoHandoffComplaints: boolean; // default true
+  autoHandoffUncertain: boolean; // default true
+  maxConsecutiveAutoReplies: number; // default 5
+  debounceSeconds: number; // default 3
+}
+
+export interface ChannelConnection {
+  id: string;
+  businessId: string;
+  channelType: ChannelType;
+  status: ChannelConnectionStatus;
+  externalAccountId?: string | null; // WABA ID
+  externalPhoneNumberId?: string | null; // Phone Number ID
+  displayName: string;
+  encryptedAccessToken?: string | null;
+  accessTokenIv?: string | null;
+  accessTokenTag?: string | null;
+  webhookVerifyToken?: string | null;
+  metadata: {
+    autopilotSettings?: AutopilotSettings;
+    verifiedAt?: string;
+    qualityRating?: string;
+    verifiedName?: string;
+    codeVerificationStatus?: string;
+    [key: string]: any;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChannelMessage {
+  id: string;
+  businessId: string;
+  channelConnectionId?: string | null;
+  channelType: ChannelType;
+  externalConversationId: string;
+  externalMessageId: string;
+  customerIdentifier: string;
+  direction: ChannelMessageDirection;
+  messageText: string;
+  status: ChannelMessageStatus;
+  metadata: Record<string, any>;
+  createdAt: string;
+}
+
+export interface ChannelWebhookEvent {
+  eventId: string;
+  channelType: ChannelType;
+  businessId?: string | null;
+  payloadHash: string;
+  processedAt: string;
+}
+
+export interface ConversationHandoff {
+  id: string;
+  businessId: string;
+  channelType: ChannelType;
+  customerIdentifier: string;
+  customerName?: string | null;
+  status: HandoffStatus;
+  reason: HandoffReason;
+  notes: string;
+  lastMessageText: string;
+  createdAt: string;
+  updatedAt: string;
+}
+

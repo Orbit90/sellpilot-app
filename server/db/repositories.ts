@@ -19,6 +19,10 @@ import {
   SubscriptionStatus,
   UsageRecord,
   PaymentRecord,
+  ChannelConnection,
+  ChannelMessage,
+  ChannelWebhookEvent,
+  ConversationHandoff,
 } from '../../src/types';
 import {
   demoBusiness,
@@ -2465,4 +2469,318 @@ export const passwordResetTokensRepo = {
     };
   },
 };
+
+// ==========================================
+// 15. CHANNEL CONNECTIONS REPOSITORY
+// ==========================================
+export const channelsRepo = {
+  mapRow(r: any): ChannelConnection {
+    return {
+      id: r.id,
+      businessId: r.business_id,
+      channelType: r.channel_type,
+      status: r.status,
+      externalAccountId: r.external_account_id,
+      externalPhoneNumberId: r.external_phone_number_id,
+      displayName: r.display_name,
+      encryptedAccessToken: r.encrypted_access_token,
+      accessTokenIv: r.access_token_iv,
+      accessTokenTag: r.access_token_tag,
+      webhookVerifyToken: r.webhook_verify_token,
+      metadata: safeJsonParse(r.metadata, {}),
+      createdAt: new Date(r.created_at).toISOString(),
+      updatedAt: new Date(r.updated_at).toISOString(),
+    };
+  },
+
+  async findById(id: string): Promise<ChannelConnection | null> {
+    const res = await query('SELECT * FROM channel_connections WHERE id = $1', [id]);
+    return res.rows.length ? this.mapRow(res.rows[0]) : null;
+  },
+
+  async findByBusinessId(businessId: string, channelType: string = 'whatsapp'): Promise<ChannelConnection | null> {
+    const res = await query(
+      'SELECT * FROM channel_connections WHERE business_id = $1 AND channel_type = $2 ORDER BY created_at DESC LIMIT 1',
+      [businessId, channelType]
+    );
+    return res.rows.length ? this.mapRow(res.rows[0]) : null;
+  },
+
+  async findByPhoneNumberId(phoneNumberId: string): Promise<ChannelConnection | null> {
+    if (!phoneNumberId) return null;
+    const res = await query(
+      'SELECT * FROM channel_connections WHERE external_phone_number_id = $1 LIMIT 1',
+      [phoneNumberId]
+    );
+    return res.rows.length ? this.mapRow(res.rows[0]) : null;
+  },
+
+  async findByAccountId(accountId: string): Promise<ChannelConnection | null> {
+    if (!accountId) return null;
+    const res = await query(
+      'SELECT * FROM channel_connections WHERE external_account_id = $1 LIMIT 1',
+      [accountId]
+    );
+    return res.rows.length ? this.mapRow(res.rows[0]) : null;
+  },
+
+  async create(conn: Partial<ChannelConnection>): Promise<ChannelConnection> {
+    const id = conn.id || `conn_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const res = await query(
+      `INSERT INTO channel_connections (
+        id, business_id, channel_type, status,
+        external_account_id, external_phone_number_id, display_name,
+        encrypted_access_token, access_token_iv, access_token_tag,
+        webhook_verify_token, metadata, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+      RETURNING *`,
+      [
+        id,
+        conn.businessId,
+        conn.channelType || 'whatsapp',
+        conn.status || 'disconnected',
+        conn.externalAccountId || null,
+        conn.externalPhoneNumberId || null,
+        conn.displayName || '',
+        conn.encryptedAccessToken || null,
+        conn.accessTokenIv || null,
+        conn.accessTokenTag || null,
+        conn.webhookVerifyToken || null,
+        JSON.stringify(conn.metadata || {}),
+      ]
+    );
+    return this.mapRow(res.rows[0]);
+  },
+
+  async update(id: string, updates: Partial<ChannelConnection>): Promise<ChannelConnection | null> {
+    const existing = await this.findById(id);
+    if (!existing) return null;
+
+    const merged = {
+      ...existing,
+      ...updates,
+      metadata: updates.metadata ? { ...existing.metadata, ...updates.metadata } : existing.metadata,
+    };
+
+    const res = await query(
+      `UPDATE channel_connections SET
+        status = $1,
+        external_account_id = $2,
+        external_phone_number_id = $3,
+        display_name = $4,
+        encrypted_access_token = $5,
+        access_token_iv = $6,
+        access_token_tag = $7,
+        webhook_verify_token = $8,
+        metadata = $9,
+        updated_at = NOW()
+       WHERE id = $10
+       RETURNING *`,
+      [
+        merged.status,
+        merged.externalAccountId || null,
+        merged.externalPhoneNumberId || null,
+        merged.displayName,
+        merged.encryptedAccessToken || null,
+        merged.accessTokenIv || null,
+        merged.accessTokenTag || null,
+        merged.webhookVerifyToken || null,
+        JSON.stringify(merged.metadata || {}),
+        id,
+      ]
+    );
+    return res.rows.length ? this.mapRow(res.rows[0]) : null;
+  },
+
+  async delete(id: string): Promise<boolean> {
+    const res = await query('DELETE FROM channel_connections WHERE id = $1', [id]);
+    return (res.rowCount ?? 0) > 0;
+  },
+};
+
+// ==========================================
+// 16. CHANNEL MESSAGES REPOSITORY
+// ==========================================
+export const channelMessagesRepo = {
+  mapRow(r: any): ChannelMessage {
+    return {
+      id: r.id,
+      businessId: r.business_id,
+      channelConnectionId: r.channel_connection_id,
+      channelType: r.channel_type,
+      externalConversationId: r.external_conversation_id,
+      externalMessageId: r.external_message_id,
+      customerIdentifier: r.customer_identifier,
+      direction: r.direction,
+      messageText: r.message_text,
+      status: r.status,
+      metadata: safeJsonParse(r.metadata, {}),
+      createdAt: new Date(r.created_at).toISOString(),
+    };
+  },
+
+  async create(msg: Partial<ChannelMessage>): Promise<ChannelMessage> {
+    const id = msg.id || `cmsg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const res = await query(
+      `INSERT INTO channel_messages (
+        id, business_id, channel_connection_id, channel_type,
+        external_conversation_id, external_message_id, customer_identifier,
+        direction, message_text, status, metadata, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+      RETURNING *`,
+      [
+        id,
+        msg.businessId,
+        msg.channelConnectionId || null,
+        msg.channelType || 'whatsapp',
+        msg.externalConversationId,
+        msg.externalMessageId,
+        msg.customerIdentifier,
+        msg.direction || 'inbound',
+        msg.messageText || '',
+        msg.status || 'delivered',
+        JSON.stringify(msg.metadata || {}),
+      ]
+    );
+    return this.mapRow(res.rows[0]);
+  },
+
+  async findByExternalMessageId(externalMessageId: string): Promise<ChannelMessage | null> {
+    const res = await query(
+      'SELECT * FROM channel_messages WHERE external_message_id = $1 LIMIT 1',
+      [externalMessageId]
+    );
+    return res.rows.length ? this.mapRow(res.rows[0]) : null;
+  },
+
+  async listByConversation(businessId: string, externalConversationId: string, limit: number = 30): Promise<ChannelMessage[]> {
+    const res = await query(
+      'SELECT * FROM channel_messages WHERE business_id = $1 AND external_conversation_id = $2 ORDER BY created_at ASC LIMIT $3',
+      [businessId, externalConversationId, limit]
+    );
+    return res.rows.map((r: any) => this.mapRow(r));
+  },
+
+  async listByCustomer(businessId: string, customerIdentifier: string, limit: number = 30): Promise<ChannelMessage[]> {
+    const res = await query(
+      'SELECT * FROM channel_messages WHERE business_id = $1 AND customer_identifier = $2 ORDER BY created_at ASC LIMIT $3',
+      [businessId, customerIdentifier, limit]
+    );
+    return res.rows.map((r: any) => this.mapRow(r));
+  },
+
+  async countRecentAutoReplies(businessId: string, customerIdentifier: string, sinceDate: string): Promise<number> {
+    const res = await query(
+      `SELECT COUNT(*) as count FROM channel_messages
+       WHERE business_id = $1
+         AND customer_identifier = $2
+         AND direction = 'outbound'
+         AND created_at >= $3`,
+      [businessId, customerIdentifier, sinceDate]
+    );
+    return parseInt(res.rows[0]?.count || '0', 10);
+  },
+};
+
+// ==========================================
+// 17. WEBHOOK EVENTS DEDUPLICATION REPOSITORY
+// ==========================================
+export const webhookEventsRepo = {
+  async hasEvent(eventId: string): Promise<boolean> {
+    if (!eventId) return false;
+    const res = await query('SELECT 1 FROM channel_webhook_events WHERE event_id = $1 LIMIT 1', [eventId]);
+    return res.rows.length > 0;
+  },
+
+  async recordEvent(eventId: string, channelType: string, businessId: string | null, payloadHash: string): Promise<boolean> {
+    try {
+      await query(
+        `INSERT INTO channel_webhook_events (event_id, channel_type, business_id, payload_hash, processed_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (event_id) DO NOTHING`,
+        [eventId, channelType, businessId, payloadHash]
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
+
+// ==========================================
+// 18. CONVERSATION HANDOFFS REPOSITORY
+// ==========================================
+export const handoffsRepo = {
+  mapRow(r: any): ConversationHandoff {
+    return {
+      id: r.id,
+      businessId: r.business_id,
+      channelType: r.channel_type,
+      customerIdentifier: r.customer_identifier,
+      customerName: r.customer_name,
+      status: r.status,
+      reason: r.reason,
+      notes: r.notes,
+      lastMessageText: r.last_message_text,
+      createdAt: new Date(r.created_at).toISOString(),
+      updatedAt: new Date(r.updated_at).toISOString(),
+    };
+  },
+
+  async create(handoff: Partial<ConversationHandoff>): Promise<ConversationHandoff> {
+    const id = handoff.id || `hnd_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const res = await query(
+      `INSERT INTO conversation_handoffs (
+        id, business_id, channel_type, customer_identifier,
+        customer_name, status, reason, notes, last_message_text,
+        created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+      RETURNING *`,
+      [
+        id,
+        handoff.businessId,
+        handoff.channelType || 'whatsapp',
+        handoff.customerIdentifier,
+        handoff.customerName || null,
+        handoff.status || 'pending_human',
+        handoff.reason || 'merchant_takeover',
+        handoff.notes || '',
+        handoff.lastMessageText || '',
+      ]
+    );
+    return this.mapRow(res.rows[0]);
+  },
+
+  async findActiveByCustomer(businessId: string, customerIdentifier: string): Promise<ConversationHandoff | null> {
+    const res = await query(
+      `SELECT * FROM conversation_handoffs
+       WHERE business_id = $1 AND customer_identifier = $2 AND status IN ('pending_human', 'in_progress')
+       ORDER BY created_at DESC LIMIT 1`,
+      [businessId, customerIdentifier]
+    );
+    return res.rows.length ? this.mapRow(res.rows[0]) : null;
+  },
+
+  async listPendingByBusiness(businessId: string): Promise<ConversationHandoff[]> {
+    const res = await query(
+      `SELECT * FROM conversation_handoffs
+       WHERE business_id = $1 AND status IN ('pending_human', 'in_progress')
+       ORDER BY created_at DESC`,
+      [businessId]
+    );
+    return res.rows.map((r: any) => this.mapRow(r));
+  },
+
+  async updateStatus(id: string, businessId: string, status: string, notes?: string): Promise<ConversationHandoff | null> {
+    const res = await query(
+      `UPDATE conversation_handoffs
+       SET status = $1, notes = COALESCE($2, notes), updated_at = NOW()
+       WHERE id = $3 AND business_id = $4
+       RETURNING *`,
+      [status, notes || null, id, businessId]
+    );
+    return res.rows.length ? this.mapRow(res.rows[0]) : null;
+  },
+};
+
 

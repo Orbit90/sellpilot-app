@@ -14,10 +14,12 @@ import {
   CheckCircle2,
   Users,
   ShieldCheck,
+  MessageSquare,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { BusinessCategory, ResponseTone } from '../../types';
 import { SubscriptionSettingsSection } from '../subscription/SubscriptionSettingsSection';
+import { WhatsAppChannelSettings } from '../channels/WhatsAppChannelSettings';
 
 export const SettingsView: React.FC = () => {
   const {
@@ -49,6 +51,7 @@ export const SettingsView: React.FC = () => {
   const [language, setLanguage] = useState(settings?.language || 'English (Nigerian)');
   const [enablePidgin, setEnablePidgin] = useState(settings?.enablePidgin ?? true);
 
+  const [settingsTab, setSettingsTab] = useState<'profile' | 'channels' | 'ai' | 'subscription'>('profile');
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -147,18 +150,55 @@ export const SettingsView: React.FC = () => {
             </button>
           )}
 
-          <button
-            onClick={handleSaveAll}
-            disabled={isSaving}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm bg-teal-600 hover:bg-teal-500 text-white shadow-sm transition-colors shrink-0 disabled:opacity-50"
-          >
-            <Save className="w-4 h-4" />
-            <span>{isSaving ? 'Saving...' : 'Save Settings'}</span>
-          </button>
+          {settingsTab === 'profile' && (
+            <button
+              onClick={handleSaveAll}
+              disabled={isSaving}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm bg-teal-600 hover:bg-teal-500 text-white shadow-sm transition-colors shrink-0 disabled:opacity-50"
+            >
+              <Save className="w-4 h-4" />
+              <span>{isSaving ? 'Saving...' : 'Save Settings'}</span>
+            </button>
+          )}
         </div>
       </div>
 
-      <form onSubmit={handleSaveAll} className="space-y-6">
+      {/* Settings Navigation Tabs */}
+      <div className="flex items-center gap-1.5 overflow-x-auto p-1 bg-slate-200/70 rounded-xl border border-slate-300/60 text-xs font-bold">
+        <button
+          type="button"
+          onClick={() => setSettingsTab('profile')}
+          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-all ${
+            settingsTab === 'profile'
+              ? 'bg-white text-slate-900 shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+          }`}
+        >
+          <Building2 className="w-3.5 h-3.5" />
+          <span>Store Profile & Policies</span>
+        </button>
+
+        <button
+          type="button"
+          id="channels-tab-btn"
+          onClick={() => setSettingsTab('channels')}
+          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-all ${
+            settingsTab === 'channels'
+              ? 'bg-white text-slate-900 shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+          }`}
+        >
+          <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+          <span>Channels</span>
+        </button>
+      </div>
+
+      {settingsTab === 'channels' ? (
+        <div id="channels-section" className="space-y-6">
+          <WhatsAppChannelSettings />
+        </div>
+      ) : (
+        <form onSubmit={handleSaveAll} className="space-y-6">
         {/* Guided Onboarding Setup Wizard Banner */}
         <div className="bg-gradient-to-r from-teal-950 via-slate-900 to-slate-900 text-white p-4 sm:p-5 rounded-2xl border border-teal-500/30 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1">
@@ -453,6 +493,7 @@ export const SettingsView: React.FC = () => {
           </button>
         </div>
       </form>
+      )}
     </div>
   );
 };

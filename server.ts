@@ -11,7 +11,7 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { db } from './server/db';
 import { analyzeConversation, generateAIReply, generateFollowUpMessage } from './server/gemini';
-import { Business, ConversationAnalysis, Customer, Order, Product, User, SubscriptionMetric } from './src/types';
+import { Business, ConversationAnalysis, Customer, Order, Product, User, SubscriptionMetric, AutopilotSettings, ChannelConnection } from './src/types';
 import { generateToken, hashPassword, sanitizeUser, verifyPassword, validatePasswordPolicy } from './server/auth';
 import { DEMO_BUSINESS_ID, DEMO_USER_ID } from './src/data/demoData';
 import {
@@ -43,6 +43,9 @@ import {
   sendPasswordResetEmail,
   checkPasswordResetRateLimit,
 } from './server/services/emailService';
+import { defaultWhatsAppAdapter } from './server/channels/whatsappAdapter';
+import { autopilotEngine, DEFAULT_AUTOPILOT_SETTINGS } from './server/services/autopilotEngine';
+import { encryptChannelToken, decryptChannelToken } from './server/services/channelEncryption';
 
 declare global {
   namespace Express {
@@ -1131,6 +1134,441 @@ async function startServer() {
     } catch (err: any) {
       console.error('Paystack webhook error:', err?.message || err);
       return res.status(500).json({ status: false, error: 'Webhook processing error.' });
+    }
+  });
+
+  // =========================================================================
+  // --- OFFICIAL META WHATSAPP BUSINESS CLOUD API INTEGRATION ---
+  // =========================================================================
+
+  // 1. Meta Webhook Verification (GET /api/channels/whatsapp/webhook)
+  // Required by Meta App Dashboard during webhook configuration
+  app.get('/api/channels/whatsapp/webhook', (req, res) => {
+    try {
+      const mode = req.query['hub.mode'] as string;
+      const token = req.query['hub.verify_token'] as string;
+      const challenge = req.query['hub.challenge'] as string;
+
+      const result = defaultWhatsAppAdapter.verifyWebhook({ mode, token, challenge });
+      if (result.verified && result.challenge !== undefined) {
+        // Meta strictly requires returning the raw challenge string with HTTP 200 as plain text
+        return res.status(200).type('text/plain').send(result.challenge);
+      }
+
+      console.warn('WhatsApp webhook verification rejected:', result.error);
+      return res.status(403).json({ error: result.error || 'Webhook verification failed' });
+    } catch (err: any) {
+      console.error('WhatsApp webhook verification error:', err);
+      return res.status(500).json({ error: 'Internal verification error' });
+    }
+  });
+
+  // 2. Meta Event Ingestion Webhook (POST /api/channels/whatsapp/webhook)
+  // Receives incoming messages and message delivery status events
+  app.post('/api/channels/whatsapp/webhook', async (req, res) => {
+    try {
+      // Step A: Signature Verification
+      const signatureHeader = req.headers['x-hub-signature-256'] as string | undefined;
+      const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body));
+
+      const isValidSignature = defaultWhatsAppAdapter.validateWebhookSignature(rawBody, signatureHeader);
+      if (!isValidSignature) {
+        console.warn('WhatsApp webhook rejected: Invalid x-hub-signature-256 header.');
+        return res.status(401).json({ error: 'Invalid webhook signature.' });
+      }
+
+      // Step B: Payload Validation
+      const payload = req.body;
+      if (
+        !payload ||
+        typeof payload !== 'object' ||
+        Array.isArray(payload) ||
+        payload.object !== 'whatsapp_business_account' ||
+        !Array.isArray(payload.entry)
+      ) {
+        return res.status(400).json({ error: 'Malformed webhook payload.' });
+      }
+
+      const { incomingMessages, statusUpdates } = defaultWhatsAppAdapter.parseWebhookPayload(payload);
+
+      // Step C: Process Incoming Messages (Multi-Tenant & Deduplication Protected)
+      for (const item of incomingMessages) {
+        const rawMsg = item.rawMessage;
+        if (!rawMsg || !rawMsg.id) continue;
+
+        // Deduplication Protection: Prevent processing duplicate delivery events
+        const isDuplicate = await db.webhookEvents.hasEvent(rawMsg.id);
+        if (isDuplicate) {
+          continue;
+        }
+
+        // Multi-Tenant Isolation: Resolve business tenant strictly by external phone_number_id
+        const connection = await db.channels.findByPhoneNumberId(item.phoneNumberId);
+        if (!connection) {
+          console.warn(`WhatsApp webhook received for unregistered phone_number_id: ${item.phoneNumberId}`);
+          continue;
+        }
+
+        if (connection.status !== 'connected') {
+          console.warn(`WhatsApp webhook received for non-connected business ${connection.businessId} (status: ${connection.status})`);
+          continue;
+        }
+
+        // Record event in deduplication table
+        const payloadHash = crypto.createHash('sha256').update(JSON.stringify(rawMsg)).digest('hex');
+        await db.webhookEvents.recordEvent(rawMsg.id, 'whatsapp', connection.businessId, payloadHash);
+
+        // Normalize message into SellPilot canonical format
+        const normalized = defaultWhatsAppAdapter.normalizeMessage({
+          rawMessage: rawMsg,
+          contact: item.contact,
+          phoneNumberId: item.phoneNumberId,
+          businessId: connection.businessId,
+          channelConnectionId: connection.id,
+        });
+
+        if (normalized) {
+          // Process message through Autopilot Conversation Engine
+          await autopilotEngine.processIncomingMessage(normalized, connection);
+        }
+      }
+
+      // Step D: Process Delivery Status Updates
+      for (const st of statusUpdates) {
+        if (!st.messageId) continue;
+        const existingMsg = await db.channelMessages.findByExternalMessageId(st.messageId);
+        if (existingMsg) {
+          // Non-fatal status update
+          try {
+            await db.query(
+              'UPDATE channel_messages SET status = $1 WHERE external_message_id = $2',
+              [st.status, st.messageId]
+            );
+          } catch {}
+        }
+      }
+
+      // Step E: Always respond HTTP 200 to Meta
+      return res.status(200).json({ success: true, processed: incomingMessages.length });
+    } catch (err: any) {
+      console.error('WhatsApp webhook error:', err);
+      // Return 200 with error log so Meta doesn't disable the webhook endpoint on transient server errors
+      return res.status(200).json({ success: false, error: 'Internal processing error' });
+    }
+  });
+
+  // 3. Channel Status & Configuration (GET /api/channels/whatsapp/status)
+  app.get('/api/channels/whatsapp/status', requireAuth, async (req, res) => {
+    try {
+      const businessId = req.businessId!;
+      const connection = await db.channels.findByBusinessId(businessId, 'whatsapp');
+
+      const appBaseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+      const webhookUrl = `${appBaseUrl.replace(/\/$/, '')}/api/channels/whatsapp/webhook`;
+
+      // Never expose encrypted credentials or keys to the frontend
+      const sanitizedConnection = connection
+        ? {
+            id: connection.id,
+            businessId: connection.businessId,
+            channelType: connection.channelType,
+            status: connection.status,
+            displayName: connection.displayName,
+            externalPhoneNumberId: connection.externalPhoneNumberId,
+            externalAccountId: connection.externalAccountId,
+            metadata: connection.metadata || {},
+            createdAt: connection.createdAt,
+            updatedAt: connection.updatedAt,
+          }
+        : null;
+
+      res.json({
+        configured: Boolean(connection && connection.status === 'connected'),
+        status: connection?.status || 'disconnected',
+        connection: sanitizedConnection,
+        webhookUrl,
+        verifyTokenConfigured: Boolean(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN),
+        autopilotSettings: connection?.metadata?.autopilotSettings || DEFAULT_AUTOPILOT_SETTINGS,
+      });
+    } catch (err: any) {
+      console.error('Failed to get WhatsApp channel status:', err);
+      res.status(500).json({ error: 'Failed to retrieve WhatsApp channel status' });
+    }
+  });
+
+  // 4. Connect Official WhatsApp Business Account (POST /api/channels/whatsapp/connect)
+  app.post('/api/channels/whatsapp/connect', requireAuth, async (req, res) => {
+    try {
+      const businessId = req.businessId!;
+      const { phoneNumberId, wabaId, accessToken, displayName } = req.body || {};
+
+      if (!phoneNumberId || typeof phoneNumberId !== 'string' || !phoneNumberId.trim()) {
+        return res.status(400).json({ error: 'Meta WhatsApp Phone Number ID is required.' });
+      }
+
+      if (!accessToken || typeof accessToken !== 'string' || accessToken.trim().length < 15) {
+        return res.status(400).json({ error: 'A valid Meta System User or Permanent Access Token is required.' });
+      }
+
+      const cleanPhoneId = phoneNumberId.trim();
+      const cleanWabaId = typeof wabaId === 'string' ? wabaId.trim() : '';
+      const cleanToken = accessToken.trim();
+
+      // Check if this Phone Number ID is already attached to another business
+      const existingConn = await db.channels.findByPhoneNumberId(cleanPhoneId);
+      if (existingConn && existingConn.businessId !== businessId && existingConn.status === 'connected') {
+        return res.status(400).json({
+          error: 'This WhatsApp Phone Number ID is already connected to another merchant account.',
+        });
+      }
+
+      // Verify credentials with Meta Graph API
+      let metaDetails = {
+        verified: true,
+        displayPhoneNumber: displayName?.trim() || cleanPhoneId,
+        verifiedName: '',
+        qualityRating: 'GREEN',
+        codeVerificationStatus: 'VERIFIED',
+      };
+
+      // Only attempt remote verification if not explicitly running mock tests
+      if (process.env.NODE_ENV !== 'test' || process.env.ENABLE_REMOTE_META_VERIFY === 'true') {
+        const verifyRes = await defaultWhatsAppAdapter.verifyMetaCredentials(cleanPhoneId, cleanToken);
+        if (!verifyRes.verified) {
+          return res.status(400).json({
+            error: `Meta validation failed: ${verifyRes.error || 'Invalid credentials or permissions.'}`,
+          });
+        }
+        metaDetails = {
+          verified: true,
+          displayPhoneNumber: verifyRes.displayPhoneNumber || displayName?.trim() || cleanPhoneId,
+          verifiedName: verifyRes.verifiedName || '',
+          qualityRating: verifyRes.qualityRating || 'GREEN',
+          codeVerificationStatus: verifyRes.codeVerificationStatus || 'VERIFIED',
+        };
+      }
+
+      // Encrypt access token using AES-256-GCM before storage
+      const encrypted = encryptChannelToken(cleanToken);
+
+      // Check if business already has a record to update or create
+      const existingBizConn = await db.channels.findByBusinessId(businessId, 'whatsapp');
+
+      let savedConnection;
+      if (existingBizConn) {
+        savedConnection = await db.channels.update(existingBizConn.id, {
+          status: 'connected',
+          externalAccountId: cleanWabaId || existingBizConn.externalAccountId,
+          externalPhoneNumberId: cleanPhoneId,
+          displayName: metaDetails.displayPhoneNumber || existingBizConn.displayName,
+          encryptedAccessToken: encrypted.ciphertext,
+          accessTokenIv: encrypted.iv,
+          accessTokenTag: encrypted.tag,
+          metadata: {
+            ...existingBizConn.metadata,
+            qualityRating: metaDetails.qualityRating,
+            verifiedName: metaDetails.verifiedName,
+            verifiedAt: new Date().toISOString(),
+            autopilotSettings: existingBizConn.metadata?.autopilotSettings || DEFAULT_AUTOPILOT_SETTINGS,
+          },
+        });
+      } else {
+        savedConnection = await db.channels.create({
+          businessId,
+          channelType: 'whatsapp',
+          status: 'connected',
+          externalAccountId: cleanWabaId,
+          externalPhoneNumberId: cleanPhoneId,
+          displayName: metaDetails.displayPhoneNumber,
+          encryptedAccessToken: encrypted.ciphertext,
+          accessTokenIv: encrypted.iv,
+          accessTokenTag: encrypted.tag,
+          metadata: {
+            qualityRating: metaDetails.qualityRating,
+            verifiedName: metaDetails.verifiedName,
+            verifiedAt: new Date().toISOString(),
+            autopilotSettings: DEFAULT_AUTOPILOT_SETTINGS,
+          },
+        });
+      }
+
+      await db.persist();
+
+      res.json({
+        success: true,
+        message: 'WhatsApp Business account connected successfully.',
+        connection: {
+          id: savedConnection?.id,
+          businessId,
+          channelType: 'whatsapp',
+          status: 'connected',
+          displayName: savedConnection?.displayName,
+          externalPhoneNumberId: savedConnection?.externalPhoneNumberId,
+          externalAccountId: savedConnection?.externalAccountId,
+          metadata: savedConnection?.metadata,
+        },
+      });
+    } catch (err: any) {
+      console.error('WhatsApp connection error:', err);
+      res.status(500).json({ error: 'Failed to connect WhatsApp account. Please check credentials.' });
+    }
+  });
+
+  // 5. Disconnect WhatsApp Account (POST /api/channels/whatsapp/disconnect)
+  app.post('/api/channels/whatsapp/disconnect', requireAuth, async (req, res) => {
+    try {
+      const businessId = req.businessId!;
+      const connection = await db.channels.findByBusinessId(businessId, 'whatsapp');
+      if (connection) {
+        await db.channels.update(connection.id, {
+          status: 'disconnected',
+          encryptedAccessToken: null,
+          accessTokenIv: null,
+          accessTokenTag: null,
+        });
+        await db.persist();
+      }
+
+      res.json({ success: true, message: 'WhatsApp Business disconnected successfully.' });
+    } catch (err: any) {
+      console.error('WhatsApp disconnect error:', err);
+      res.status(500).json({ error: 'Failed to disconnect WhatsApp account.' });
+    }
+  });
+
+  // 6. Update Autopilot & Automation Rules (POST /api/channels/whatsapp/settings)
+  app.post('/api/channels/whatsapp/settings', requireAuth, async (req, res) => {
+    try {
+      const businessId = req.businessId!;
+      const connection = await db.channels.findByBusinessId(businessId, 'whatsapp');
+      if (!connection) {
+        return res.status(404).json({ error: 'No WhatsApp connection found for this store.' });
+      }
+
+      const newSettings = req.body || {};
+      const currentSettings = connection.metadata?.autopilotSettings || DEFAULT_AUTOPILOT_SETTINGS;
+
+      const mergedSettings: AutopilotSettings = {
+        ...currentSettings,
+        ...newSettings,
+      };
+
+      const updated = await db.channels.update(connection.id, {
+        metadata: {
+          ...connection.metadata,
+          autopilotSettings: mergedSettings,
+        },
+      });
+
+      await db.persist();
+
+      res.json({
+        success: true,
+        autopilotSettings: mergedSettings,
+      });
+    } catch (err: any) {
+      console.error('Failed to update autopilot settings:', err);
+      res.status(500).json({ error: 'Failed to update autopilot settings.' });
+    }
+  });
+
+  // 7. List Active Human Handoffs (GET /api/channels/whatsapp/handoffs)
+  app.get('/api/channels/whatsapp/handoffs', requireAuth, async (req, res) => {
+    try {
+      const businessId = req.businessId!;
+      const handoffs = await db.handoffs.listPendingByBusiness(businessId);
+      res.json({ handoffs });
+    } catch (err: any) {
+      console.error('Failed to list handoffs:', err);
+      res.status(500).json({ error: 'Failed to retrieve human handoffs.' });
+    }
+  });
+
+  // 8. Resolve Human Handoff (POST /api/channels/whatsapp/handoffs/:id/resolve)
+  app.post('/api/channels/whatsapp/handoffs/:id/resolve', requireAuth, async (req, res) => {
+    try {
+      const businessId = req.businessId!;
+      const handoffId = req.params.id;
+      const { notes } = req.body || {};
+
+      const updated = await db.handoffs.updateStatus(handoffId, businessId, 'resolved', notes);
+      if (!updated) {
+        return res.status(404).json({ error: 'Handoff record not found or unauthorized.' });
+      }
+
+      await db.persist();
+      res.json({ success: true, handoff: updated });
+    } catch (err: any) {
+      console.error('Failed to resolve handoff:', err);
+      res.status(500).json({ error: 'Failed to resolve handoff.' });
+    }
+  });
+
+  // 9. Manual Outbound WhatsApp Message Send (POST /api/channels/whatsapp/send)
+  app.post('/api/channels/whatsapp/send', requireAuth, async (req, res) => {
+    try {
+      const businessId = req.businessId!;
+      const { to, text } = req.body || {};
+
+      if (!to || !text || !text.trim()) {
+        return res.status(400).json({ error: 'Recipient phone number and message text are required.' });
+      }
+
+      const connection = await db.channels.findByBusinessId(businessId, 'whatsapp');
+      if (!connection || connection.status !== 'connected' || !connection.externalPhoneNumberId) {
+        return res.status(400).json({ error: 'No active WhatsApp Business connection found.' });
+      }
+
+      if (!connection.encryptedAccessToken || !connection.accessTokenIv || !connection.accessTokenTag) {
+        return res.status(400).json({ error: 'WhatsApp connection credentials incomplete.' });
+      }
+
+      const accessToken = decryptChannelToken(
+        connection.encryptedAccessToken,
+        connection.accessTokenIv,
+        connection.accessTokenTag
+      );
+
+      const sendResult = await defaultWhatsAppAdapter.sendMessage({
+        phoneNumberId: connection.externalPhoneNumberId,
+        accessToken,
+        to: String(to).trim(),
+        text: String(text).trim(),
+      });
+
+      if (!sendResult.success) {
+        return res.status(500).json({ error: sendResult.error || 'Failed to send WhatsApp message via Meta Cloud API.' });
+      }
+
+      // Record outbound message in channel_messages
+      await db.channelMessages.create({
+        businessId,
+        channelConnectionId: connection.id,
+        channelType: 'whatsapp',
+        externalConversationId: `wa_${String(to).replace(/\D/g, '')}`,
+        externalMessageId: sendResult.externalMessageId || `out_${Date.now()}`,
+        customerIdentifier: String(to).trim(),
+        direction: 'outbound',
+        messageText: String(text).trim(),
+        status: 'sent',
+        metadata: { manual: true, sentByUserId: req.user?.id },
+      });
+
+      // If active handoff existed for this customer, mark it resolved or in progress
+      const activeHandoff = await db.handoffs.findActiveByCustomer(businessId, String(to).trim());
+      if (activeHandoff) {
+        await db.handoffs.updateStatus(activeHandoff.id, businessId, 'resolved', 'Merchant replied manually.');
+      }
+
+      await db.persist();
+
+      res.json({
+        success: true,
+        messageId: sendResult.externalMessageId,
+      });
+    } catch (err: any) {
+      console.error('Manual WhatsApp message send error:', err);
+      res.status(500).json({ error: 'Failed to send message.' });
     }
   });
 
@@ -2385,6 +2823,13 @@ async function startServer() {
     }
   });
 
+  // --- API ROUTE BOUNDARY GUARD ---
+  // Guarantees that any unmatched /api/* requests return HTTP 404 JSON and NEVER fall through
+  // to Vite middlewares or the frontend SPA static index.html fallback
+  app.all('/api/*', (req, res) => {
+    res.status(404).type('application/json').json({ error: 'API route not found' });
+  });
+
   // --- VITE MIDDLEWARE / SPA SERVING ---
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -2424,6 +2869,10 @@ async function startServer() {
 
     // SPA client-side routing fallback (for HTML navigation only)
     app.get('*', (req, res) => {
+      // Guard: Never serve HTML fallback for API endpoints
+      if (req.path.startsWith('/api/') || req.path === '/api') {
+        return res.status(404).type('application/json').json({ error: 'API route not found' });
+      }
       if (req.path.includes('.') && !req.path.endsWith('.html')) {
         return res.status(404).type('text/plain').send('Not Found');
       }

@@ -46,11 +46,16 @@ async function generateWithModelFallback(params: {
   for (let i = 0; i < PRIMARY_MODELS.length; i++) {
     const model = PRIMARY_MODELS[i];
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: params.contents,
-        config: params.config,
-      });
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: params.config,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Gemini API call timed out after 3500ms')), 3500)
+        ),
+      ]);
       const text = response.text?.trim();
       if (text) return text;
     } catch (err: any) {

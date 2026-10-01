@@ -13,6 +13,10 @@ import {
   paymentsRepo,
   verificationTokensRepo,
   passwordResetTokensRepo,
+  channelsRepo,
+  channelMessagesRepo,
+  webhookEventsRepo,
+  handoffsRepo,
   resetDemoData,
 } from './db/repositories';
 import { runMigrations, createRelationalSnapshot } from './db/migrate';
@@ -89,6 +93,10 @@ export const db = {
   payments: paymentsRepo,
   verificationTokens: verificationTokensRepo,
   passwordResetTokens: passwordResetTokensRepo,
+  channels: channelsRepo,
+  channelMessages: channelMessagesRepo,
+  webhookEvents: webhookEventsRepo,
+  handoffs: handoffsRepo,
 
   // Legacy state accessor for quick demo bootstrap
   getState: () => {

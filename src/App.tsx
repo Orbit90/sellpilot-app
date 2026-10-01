@@ -42,9 +42,10 @@ const MainContent: React.FC = () => {
     !isResetPassword &&
     typeof window !== 'undefined' &&
     (window.location.pathname.startsWith('/verify-email') ||
-      window.location.search.includes('verify_token=') ||
+      (window.location.search.includes('verify_token=') && !window.location.search.includes('hub.')) ||
       (window.location.search.includes('token=') &&
         !window.location.pathname.startsWith('/reset-password') &&
+        !window.location.search.includes('hub.') &&
         !window.location.search.includes('trxref=') &&
         !window.location.search.includes('reference=')));
 

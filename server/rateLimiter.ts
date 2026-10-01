@@ -66,12 +66,14 @@ export function shouldSkipRateLimit(req: Request): boolean {
     return true;
   }
 
-  // 2. Skip Paystack webhooks
+  // 2. Skip Paystack webhooks and Meta WhatsApp webhooks
   const path = req.path || '';
   const originalUrl = req.originalUrl || '';
   if (
     path === '/payments/paystack/webhook' ||
-    originalUrl.startsWith('/api/payments/paystack/webhook')
+    originalUrl.startsWith('/api/payments/paystack/webhook') ||
+    path === '/channels/whatsapp/webhook' ||
+    originalUrl.startsWith('/api/channels/whatsapp/webhook')
   ) {
     return true;
   }
